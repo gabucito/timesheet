@@ -582,11 +582,24 @@ fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &slint::
                     .collect();
                 ui.set_workers(Rc::new(slint::VecModel::from(worker_items)).into());
 
+                // keep worker_names updated
                 let names: Vec<SharedString> = workers
                     .iter()
                     .map(|w| SharedString::from(w.name.clone()))
                     .collect();
                 ui.set_worker_names(Rc::new(slint::VecModel::from(names)).into());
+
+                // 🔧 NEW: also refresh management_workers for the Workers tab
+                let management_worker_items: Vec<WorkerInfo> = workers
+                    .iter()
+                    .map(|w| WorkerInfo {
+                        name: SharedString::from(w.name.clone()),
+                        barcode: SharedString::from(w.barcode.clone()),
+                    })
+                    .collect();
+                ui.set_management_workers(
+                    Rc::new(slint::VecModel::from(management_worker_items)).into(),
+                );
 
                 // Update reports
                 let mut report_items = Vec::new();
