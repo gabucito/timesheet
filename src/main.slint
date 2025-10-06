@@ -1,0 +1,85 @@
+import { Button, ListView, VerticalBox, HorizontalBox, LineEdit } from "std-widgets.slint";
+
+struct WorkerItem {
+    name: string,
+    status: string,
+    time: string,
+    color: color,
+}
+
+export component MainWindow inherits Window {
+    title: "Timesheet";
+    width: 800px;
+    height: 600px;
+
+    in-out property<[WorkerItem]> workers: [];
+    property<string> barcode_input: "";
+
+    in-out property<bool> show_workers: true;
+    in-out property<bool> show_reports: false;
+
+    callback barcode_scanned(string);
+
+    FocusScope {
+        key-pressed(event) => {
+            if event.text == "\n" {
+                barcode_scanned(barcode_input);
+                barcode_input = "";
+            } else {
+                barcode_input += event.text;
+            }
+            return accept;
+        }
+
+        VerticalBox {
+            HorizontalBox {
+                Button {
+                    text: "Workers";
+                    clicked => { show_workers = true; show_reports = false; }
+                }
+                Button {
+                    text: "Reports";
+                    clicked => { show_workers = false; show_reports = true; }
+                }
+            }
+
+            if show_workers: ListView {
+                for worker in workers: Rectangle {
+                    background: worker.color;
+                    VerticalBox {
+                        Text {
+                            text: worker.name;
+                            font-size: 16px;
+                        }
+                        Text {
+                            text: worker.status;
+                            font-size: 14px;
+                        }
+                        Text {
+                            text: worker.time;
+                            font-size: 12px;
+                        }
+                    }
+                }
+            }
+
+            if show_reports: VerticalBox {
+                HorizontalBox {
+                    Text { text: "Worker ID:"; }
+                    LineEdit { placeholder-text: "Enter worker ID"; }
+                }
+                HorizontalBox {
+                    Text { text: "Date:"; }
+                    LineEdit { placeholder-text: "YYYY-MM-DD"; }
+                    Button { text: "Get Daily"; }
+                }
+                HorizontalBox {
+                    Text { text: "Month:"; }
+                    LineEdit { placeholder-text: "YYYY-MM"; }
+                    Button { text: "Get Monthly"; }
+                }
+                Text { text: "Total Hours: 0.0"; } // Placeholder
+            }
+        }
+    }
+}
