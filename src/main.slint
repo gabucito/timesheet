@@ -87,7 +87,12 @@ export component MainWindow inherits MaterialWindow {
     in-out property <bool> trigger_dialog_show: false;
 
     // number of 100ms ticks since last key; -1 = disabled / idle
-in-out property <int> ticks_since_key: -1;
+ in-out property <int> ticks_since_key: -1;
+
+    // Error dialog properties
+    in-out property <string> error_dialog_message: "";
+    in-out property <bool> show_error_dialog: false;
+    in-out property <bool> trigger_error_dialog_show: false;
 
     // Periodic watchdog: re-arm itself every trigger
     watchdog_timer := Timer {
@@ -133,6 +138,16 @@ in-out property <int> ticks_since_key: -1;
         }
     }
 
+    // Auto-close timer for error dialog
+    auto-close-error-timer := Timer {
+        interval: 2s;
+        running: false;
+        triggered => {
+            show_error_dialog = false;
+            error-dialog.close();
+        }
+    }
+
     // Show dialog timer - triggers immediately when dialog should be shown
     show-dialog-timer := Timer {
         interval: 1ms;
@@ -144,6 +159,20 @@ in-out property <int> ticks_since_key: -1;
             }
             // Reset the trigger
             trigger_dialog_show = false;
+        }
+    }
+
+    // Show error dialog timer
+    show-error-dialog-timer := Timer {
+        interval: 1ms;
+        running: trigger_error_dialog_show;
+        triggered => {
+            if show_error_dialog {
+                error-dialog.show();
+                auto-close-error-timer.running = true;
+            }
+            // Reset the trigger
+            trigger_error_dialog_show = false;
         }
     }
 
@@ -160,6 +189,7 @@ in-out property <int> ticks_since_key: -1;
     callback date_changed();
     callback confirm_check_action(bool); // true for confirm, false for cancel
     callback show_notification_dialog();
+    callback close_error_dialog();
 
     date-picker := DatePickerPopup {
         x: (root.width - self.width) / 2;
@@ -208,6 +238,47 @@ in-out property <int> ticks_since_key: -1;
                         clicked => {
                             auto-close-timer.running = false;
                             show_confirm_dialog = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    error-dialog := PopupWindow {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 400px;
+        height: 150px;
+        visible: show_error_dialog;
+
+        Rectangle {
+            background: #ffffff;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #cccccc;
+
+            Vertical {
+                padding: 20px;
+                spacing: 15px;
+
+                MaterialText {
+                    text: error_dialog_message;
+                    font-size: 18px;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                    color: #ff0000;
+                }
+
+                Horizontal {
+                    alignment: center;
+
+                    FilledButton {
+                        text: "Cerrar";
+                        clicked => {
+                            auto-close-error-timer.running = false;
+                            show_error_dialog = false;
+                            close_error_dialog();
                         }
                     }
                 }
@@ -363,12 +434,6 @@ in-out property <int> ticks_since_key: -1;
                                         font-size: 24px;
                                         color: worker.color == #ff0000 ? #ffffff : #000000;
                                     }
-                                }
-
-                                MaterialText {
-                                    text: error_message;
-                                    color: #ff0000;
-                                    font-size: 18px;
                                 }
                             }
                         }

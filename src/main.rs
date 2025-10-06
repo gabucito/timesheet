@@ -10,6 +10,7 @@ use std::sync::Mutex;
 slint::include_modules!();
 
 static LAST_SCAN_TIME: Mutex<Option<chrono::DateTime<chrono::Utc>>> = Mutex::new(None);
+static LAST_SCAN_BARCODE: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Clone)]
 struct TimesheetDisplay {
@@ -38,7 +39,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui = MainWindow::new()?;
 
-    ui.set_error_message("".into());
     let now = chrono::Utc::now();
     ui.set_selected_date(now.format("%Y-%m-%d").to_string().into());
 
@@ -226,7 +226,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_reports(Rc::new(slint::VecModel::from(report_items)).into());
         }
         Err(e) => {
-            ui.set_error_message(format!("Error al cargar trabajadores: {}", e).into());
+            ui.set_error_dialog_message(format!("Error al cargar trabajadores: {}", e).into());
+            ui.set_show_error_dialog(true);
+            ui.set_trigger_error_dialog_show(true);
         }
     }
 
@@ -234,17 +236,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let conn_clone2 = conn.clone();
     ui.on_barcode_scanned(move |barcode_str| {
         println!("Barcode scanned callback triggered with: '{}'", barcode_str);
-        // Check if enough time has passed since last scan (5 seconds cooldown)
+        // Check if scan should be ignored: too fast AND same barcode as last
         let now = chrono::Utc::now();
         {
-            let mut last_scan = LAST_SCAN_TIME.lock().unwrap();
-            if let Some(last_time) = *last_scan {
-                if now.signed_duration_since(last_time) < chrono::Duration::seconds(5) {
-                    println!("Scan ignored - too soon after last scan");
-                    return; // Ignore scan, too soon after last one
+            let mut last_scan_time = LAST_SCAN_TIME.lock().unwrap();
+            let mut last_scan_barcode = LAST_SCAN_BARCODE.lock().unwrap();
+            if let (Some(last_time), Some(last_barcode)) =
+                (*last_scan_time, last_scan_barcode.as_ref())
+            {
+                if now.signed_duration_since(last_time) < chrono::Duration::seconds(5)
+                    && last_barcode == barcode_str.as_str()
+                {
+                    println!("Scan ignored - too soon after last scan and same barcode");
+                    return;
                 }
             }
-            *last_scan = Some(now);
+            *last_scan_time = Some(now);
+            *last_scan_barcode = Some(barcode_str.to_string());
         }
 
         let conn = conn_clone2.borrow();
@@ -259,9 +267,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Worker is currently clocked in, perform clock out
                         if let Err(e) = db::clock_out(&*conn, worker.id) {
                             if let Some(ui) = ui_handle_barcode.upgrade() {
-                                ui.set_error_message(
+                                ui.set_error_dialog_message(
                                     format!("Error al marcar salida: {}", e).into(),
                                 );
+                                ui.set_show_error_dialog(true);
+                                ui.set_trigger_error_dialog_show(true);
                             }
                             return;
                         }
@@ -278,9 +288,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Worker is not clocked in, perform clock in
                         if let Err(e) = db::clock_in(&*conn, worker.id) {
                             if let Some(ui) = ui_handle_barcode.upgrade() {
-                                ui.set_error_message(
+                                ui.set_error_dialog_message(
                                     format!("Error al marcar entrada: {}", e).into(),
                                 );
+                                ui.set_show_error_dialog(true);
+                                ui.set_trigger_error_dialog_show(true);
                             }
                             return;
                         }
@@ -295,26 +307,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(e) => {
                         if let Some(ui) = ui_handle_barcode.upgrade() {
-                            ui.set_error_message(format!("Error al obtener estado: {}", e).into());
+                            ui.set_error_dialog_message(
+                                format!("Error al obtener estado: {}", e).into(),
+                            );
+                            ui.set_show_error_dialog(true);
+                            ui.set_trigger_error_dialog_show(true);
                         }
                         return;
                     }
                 }
                 if let Some(ui) = ui_handle_barcode.upgrade() {
-                    ui.set_error_message("".into());
+                    ui.set_show_error_dialog(false);
                 }
                 refresh_workers(&conn_clone2, &ui_handle_barcode);
             }
             Ok(None) => {
                 println!("Worker not found for barcode: '{}'", barcode_str);
                 if let Some(ui) = ui_handle_barcode.upgrade() {
-                    ui.set_error_message("Trabajador no encontrado".into());
+                    ui.set_error_dialog_message("Trabajador no encontrado".into());
+                    ui.set_show_error_dialog(true);
+                    ui.set_trigger_error_dialog_show(true);
                 }
             }
             Err(e) => {
                 println!("Error looking up worker: {}", e);
                 if let Some(ui) = ui_handle_barcode.upgrade() {
-                    ui.set_error_message(format!("Error al buscar trabajador: {}", e).into());
+                    ui.set_error_dialog_message(
+                        format!("Error al buscar trabajador: {}", e).into(),
+                    );
+                    ui.set_show_error_dialog(true);
+                    ui.set_trigger_error_dialog_show(true);
                 }
             }
         }
@@ -330,19 +352,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match db::add_worker(&*conn, name, barcode) {
                 Ok(_) => {
                     if let Some(ui) = ui_handle_add.upgrade() {
-                        ui.set_error_message("".into());
+                        ui.set_show_error_dialog(false);
                     }
                     refresh_workers(&conn_clone3, &ui_handle_add);
                 }
                 Err(e) => {
                     if let Some(ui) = ui_handle_add.upgrade() {
-                        ui.set_error_message(format!("Error al agregar trabajador: {}", e).into());
+                        ui.set_error_dialog_message(
+                            format!("Error al agregar trabajador: {}", e).into(),
+                        );
+                        ui.set_show_error_dialog(true);
+                        ui.set_trigger_error_dialog_show(true);
                     }
                 }
             }
         } else {
             if let Some(ui) = ui_handle_add.upgrade() {
-                ui.set_error_message("El nombre y código de barras son obligatorios".into());
+                ui.set_error_dialog_message("El nombre y código de barras son obligatorios".into());
+                ui.set_show_error_dialog(true);
+                ui.set_trigger_error_dialog_show(true);
             }
         }
     });
@@ -361,29 +389,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match db::update_worker(&*conn, worker.id, new_name, new_barcode) {
                             Ok(_) => {
                                 if let Some(ui) = ui_handle_edit.upgrade() {
-                                    ui.set_error_message("".into());
+                                    ui.set_show_error_dialog(false);
                                 }
                                 refresh_workers(&conn_clone4, &ui_handle_edit);
                             }
                             Err(e) => {
                                 if let Some(ui) = ui_handle_edit.upgrade() {
-                                    ui.set_error_message(
+                                    ui.set_error_dialog_message(
                                         format!("Error al actualizar trabajador: {}", e).into(),
                                     );
+                                    ui.set_show_error_dialog(true);
+                                    ui.set_trigger_error_dialog_show(true);
                                 }
                             }
                         }
                     } else {
                         if let Some(ui) = ui_handle_edit.upgrade() {
-                            ui.set_error_message("Trabajador no encontrado".into());
+                            ui.set_error_dialog_message("Trabajador no encontrado".into());
+                            ui.set_show_error_dialog(true);
+                            ui.set_trigger_error_dialog_show(true);
                         }
                     }
                 }
                 Err(e) => {
                     if let Some(ui) = ui_handle_edit.upgrade() {
-                        ui.set_error_message(
+                        ui.set_error_dialog_message(
                             format!("Error al obtener trabajadores: {}", e).into(),
                         );
+                        ui.set_show_error_dialog(true);
+                        ui.set_trigger_error_dialog_show(true);
                     }
                 }
             }
@@ -396,6 +430,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Hide dialog
         if let Some(ui) = ui_handle_confirm.upgrade() {
             ui.set_show_confirm_dialog(false);
+        }
+    });
+
+    // Handle error dialog close
+    let ui_handle_error = ui_handle.clone();
+    ui.on_close_error_dialog(move || {
+        // Hide dialog
+        if let Some(ui) = ui_handle_error.upgrade() {
+            ui.set_show_error_dialog(false);
         }
     });
 
@@ -579,7 +622,11 @@ fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &slint::
                 ui.set_reports(Rc::new(slint::VecModel::from(report_items)).into());
             }
             Err(e) => {
-                ui.set_error_message(format!("Error al actualizar trabajadores: {}", e).into());
+                ui.set_error_dialog_message(
+                    format!("Error al actualizar trabajadores: {}", e).into(),
+                );
+                ui.set_show_error_dialog(true);
+                ui.set_trigger_error_dialog_show(true);
             }
         }
     }
