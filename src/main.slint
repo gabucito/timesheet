@@ -1,12 +1,14 @@
-import { Button, ListView, VerticalBox, HorizontalBox, LineEdit, ComboBox, DatePickerPopup } from "std-widgets.slint";
+import { DatePickerPopup, ScrollView } from "std-widgets.slint";
+import { FilledButton, TextField, NavigationBar, MaterialText, Vertical, Horizontal, TextButton, ListView, ScrollView, MaterialWindow, NavigationItem } from "../material-1.0/material.slint";
 
-struct WorkerItem {
+struct WorkerWithTimes {
     name: string,
     checked_in_time: string,
     checked_out_time: string,
     current_total_hours: string,
     color: color,
     barcode: string,
+    show_name: bool,
 }
 
 struct ReportItem {
@@ -14,6 +16,11 @@ struct ReportItem {
     daily_hours: string,
     weekly_hours: string,
     monthly_hours: string,
+}
+
+struct WorkerInfo {
+    name: string,
+    barcode: string,
 }
 
 component WorkerTile inherits Rectangle {
@@ -26,8 +33,8 @@ component WorkerTile inherits Rectangle {
     in property <color> background_color;
 
     background: background_color;
-    HorizontalBox {
-        Text {
+    Horizontal {
+        MaterialText {
             text: name;
             font-size: 20px;
             color: background_color == #ff0000 ? #ffffff : #000000;
@@ -35,7 +42,7 @@ component WorkerTile inherits Rectangle {
             width: 150px;
         }
 
-        Text {
+        MaterialText {
             text: status;
             font-size: 18px;
             color: background_color == #ff0000 ? #ffffff : #000000;
@@ -43,7 +50,7 @@ component WorkerTile inherits Rectangle {
             width: 120px;
         }
 
-        Text {
+        MaterialText {
             text: time;
             font-size: 18px;
             color: background_color == #ff0000 ? #ffffff : #000000;
@@ -53,15 +60,16 @@ component WorkerTile inherits Rectangle {
     }
 }
 
-export component MainWindow inherits Window {
+export component MainWindow inherits MaterialWindow {
     title: "Timesheet";
     width: 1920px;
     height: 1080px;
 
-    in-out property <[WorkerItem]> workers: [];
+    in-out property <[WorkerWithTimes]> workers: [];
     property <string> barcode_input: "";
     in-out property <[string]> worker_names: [];
     in-out property <[ReportItem]> reports: [];
+    in-out property <[WorkerInfo]> management_workers: [];
     in-out property <string> selected_worker: "";
     in-out property <string> selected_worker_barcode: "";
     in-out property <string> selected_date;
@@ -71,6 +79,13 @@ export component MainWindow inherits Window {
     in-out property <bool> show_time: true;
     in-out property <bool> show_reports: false;
     in-out property <bool> show_workers_tab: false;
+
+    property <int> current_tab: root.show_time ? 0 : root.show_reports ? 1 : 2;
+    property <[NavigationItem]> nav_items: [
+        { icon: @image-url("../material-1.0/ui/icons/schedule.svg"), text: "Time" },
+        { icon: @image-url("../material-1.0/ui/icons/calendar_today.svg"), text: "Reports" },
+        { icon: @image-url("../material-1.0/ui/icons/chevron_forward.svg"), text: "Workers" }
+    ];
 
     callback barcode_scanned(string);
     callback add_worker(string, string);
@@ -103,59 +118,39 @@ export component MainWindow inherits Window {
             return accept;
         }
 
-        VerticalBox {
-            HorizontalBox {
-                Button {
-                    text: "Time";
-                    height: 30px;
-                    clicked => {
-                        show_time = true;
-                        show_reports = false;
-                        show_workers_tab = false;
-                    }
-                }
+        Vertical {
+            NavigationBar {
+                height: 80px;
+                items: root.nav_items;
+                current_index: root.current_tab;
 
-                Button {
-                    text: "Reports";
-                    height: 30px;
-                    clicked => {
-                        show_time = false;
-                        show_reports = true;
-                        show_workers_tab = false;
-                    }
-                }
-
-                Button {
-                    text: "Workers";
-                    height: 30px;
-                    clicked => {
-                        show_time = false;
-                        show_reports = false;
-                        show_workers_tab = true;
-                    }
+                index_changed(index) => {
+                    show_time = index == 0;
+                    show_reports = index == 1;
+                    show_workers_tab = index == 2;
                 }
             }
 
-            if show_time: HorizontalBox {
+            if show_time: Horizontal {
                 // Current time display on the left (1/3 width)
                 Rectangle {
                     width: root.width / 3;
-                    VerticalBox {
-                        Text {
+                    Vertical {
+                        MaterialText {
                             text: "Current Time";
                             horizontal-alignment: center;
                             font-size: 24px;
                             font-weight: 700;
                         }
 
-                        Text {
+                        MaterialText {
                             text: current_time_display;
                             horizontal-alignment: center;
                             font-size: 72px;
                             font-weight: 700;
                         }
 
-                        Text {
+                        MaterialText {
                             text: "Santiago, Chile";
                             horizontal-alignment: center;
                             font-size: 18px;
@@ -164,96 +159,103 @@ export component MainWindow inherits Window {
                 }
 
                 // Worker table on the right (2/3 width)
-                VerticalBox {
+                Vertical {
                     width: root.width * 2 / 3;
-                    HorizontalBox {
-                        Text {
+                    Horizontal {
+                        MaterialText {
                             text: "Name";
                             horizontal-alignment: center;
-                            width: 150px;
+                            width: 200px;
                             font-weight: 700;
                             font-size: 20px;
                         }
 
-                        Text {
+                        MaterialText {
                             text: "Checked In";
                             horizontal-alignment: center;
-                            width: 120px;
+                            width: 200px;
                             font-weight: 700;
                             font-size: 20px;
                         }
 
-                        Text {
+                        MaterialText {
                             text: "Checked Out";
                             horizontal-alignment: center;
-                            width: 120px;
+                            width: 200px;
                             font-weight: 700;
                             font-size: 20px;
                         }
 
-                        Text {
+                        MaterialText {
                             text: "Duration";
                             horizontal-alignment: center;
-                            width: 100px;
+                            width: 200px;
                             font-weight: 700;
                             font-size: 20px;
                         }
                     }
 
                     ListView {
-                        for worker in workers: Rectangle {
-                            background: worker.color;
-                            HorizontalBox {
-                                Text {
-                                    text: worker.name;
-                                    horizontal-alignment: center;
-                                    width: 150px;
-                                    font-size: 18px;
-                                    color: worker.color == #ff0000 ? #ffffff : #000000;
+                        for worker in workers: Vertical {
+                            Rectangle {
+                                background: worker.color;
+                                Horizontal {
+                                    MaterialText {
+                                        text: worker.show_name ? worker.name : "";
+                                        horizontal-alignment: center;
+                                        width: 200px;
+                                        font-size: 18px;
+                                        color: worker.color == #ff0000 ? #ffffff : #000000;
+                                    }
+
+                                    MaterialText {
+                                        text: worker.checked_in_time;
+                                        horizontal-alignment: center;
+                                        width: 150px;
+                                        font-size: 18px;
+                                        color: worker.color == #ff0000 ? #ffffff : #000000;
+                                    }
+
+                                    MaterialText {
+                                        text: worker.checked_out_time;
+                                        horizontal-alignment: center;
+                                        width: 150px;
+                                        font-size: 18px;
+                                        color: worker.color == #ff0000 ? #ffffff : #000000;
+                                    }
+
+                                    MaterialText {
+                                        text: worker.current_total_hours;
+                                        horizontal-alignment: center;
+                                        width: 120px;
+                                        font-size: 18px;
+                                        color: worker.color == #ff0000 ? #ffffff : #000000;
+                                    }
                                 }
 
-                                Text {
-                                    text: worker.checked_in_time;
-                                    horizontal-alignment: center;
-                                    width: 120px;
+                                MaterialText {
+                                    text: error_message;
+                                    color: #ff0000;
                                     font-size: 18px;
-                                    color: worker.color == #ff0000 ? #ffffff : #000000;
-                                }
-
-                                Text {
-                                    text: worker.checked_out_time;
-                                    horizontal-alignment: center;
-                                    width: 120px;
-                                    font-size: 18px;
-                                    color: worker.color == #ff0000 ? #ffffff : #000000;
-                                }
-
-                                Text {
-                                    text: worker.current_total_hours;
-                                    horizontal-alignment: center;
-                                    width: 100px;
-                                    font-size: 18px;
-                                    color: worker.color == #ff0000 ? #ffffff : #000000;
                                 }
                             }
                         }
                     }
                 }
             }
-
-            if show_reports: VerticalBox {
-                HorizontalBox {
-                    Button {
+            if show_reports: Vertical {
+                Horizontal {
+                    FilledButton {
                         text: @tr("Elija la fecha");
 
                         clicked => {
-                            date-picker.show();
+                            date_picker.show();
                         }
                     }
                 }
 
-                HorizontalBox {
-                    Text {
+                Horizontal {
+                    MaterialText {
                         text: "Worker";
                         horizontal-alignment: center;
                         width: 300px;
@@ -261,7 +263,7 @@ export component MainWindow inherits Window {
                         font-size: 18px;
                     }
 
-                    Text {
+                    MaterialText {
                         text: "Daily";
                         horizontal-alignment: center;
                         width: 200px;
@@ -269,7 +271,7 @@ export component MainWindow inherits Window {
                         font-size: 18px;
                     }
 
-                    Text {
+                    MaterialText {
                         text: "Weekly";
                         horizontal-alignment: center;
                         width: 200px;
@@ -277,7 +279,7 @@ export component MainWindow inherits Window {
                         font-size: 18px;
                     }
 
-                    Text {
+                    MaterialText {
                         text: "Monthly";
                         horizontal-alignment: center;
                         width: 200px;
@@ -287,29 +289,29 @@ export component MainWindow inherits Window {
                 }
 
                 ListView {
-                    for report in reports: HorizontalBox {
-                        Text {
+                    for report in reports: Horizontal {
+                        MaterialText {
                             text: report.name;
                             horizontal-alignment: center;
                             width: 300px;
                             font-size: 16px;
                         }
 
-                        Text {
+                        MaterialText {
                             text: report.daily_hours;
                             horizontal-alignment: center;
                             width: 200px;
                             font-size: 16px;
                         }
 
-                        Text {
+                        MaterialText {
                             text: report.weekly_hours;
                             horizontal-alignment: center;
                             width: 200px;
                             font-size: 16px;
                         }
 
-                        Text {
+                        MaterialText {
                             text: report.monthly_hours;
                             horizontal-alignment: center;
                             width: 200px;
@@ -319,24 +321,22 @@ export component MainWindow inherits Window {
                 }
             }
 
-            if show_workers_tab: VerticalBox {
-                HorizontalBox {
-                    Text {
+            if show_workers_tab: Vertical {
+                Horizontal {
+                    MaterialText {
                         text: "Add Worker:";
                         font-size: 18px;
                     }
 
-                    add-name := LineEdit {
-                        placeholder-text: "Name";
-                        font-size: 18px;
+                    add-name := TextField {
+                        placeholder_text: "Name";
                     }
 
-                    add-barcode := LineEdit {
-                        placeholder-text: "Barcode";
-                        font-size: 18px;
+                    add-barcode := TextField {
+                        placeholder_text: "Barcode";
                     }
 
-                    Button {
+                    FilledButton {
                         text: "Add";
                         clicked => {
                             add_worker(add-name.text, add-barcode.text);
@@ -347,10 +347,10 @@ export component MainWindow inherits Window {
                 }
 
                 ListView {
-                    for worker in workers: TouchArea {
-                        VerticalBox {
-                            Text {
-                                text: worker.name + " (" + worker.barcode + ")";
+                    for worker in management_workers: TouchArea {
+                        Vertical {
+                            MaterialText {
+                                text: worker.name;
                                 font-size: 18px;
                             }
                         }
@@ -362,26 +362,24 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if selected_worker != "": VerticalBox {
-                    HorizontalBox {
-                        Text {
+                if selected_worker != "": Vertical {
+                    Horizontal {
+                        MaterialText {
                             text: "Edit Worker:";
                             font-size: 18px;
                         }
 
-                        edit-name := LineEdit {
+                        edit-name := TextField {
                             text: selected_worker;
-                            font-size: 18px;
                         }
 
-                        edit-barcode := LineEdit {
+                        edit-barcode := TextField {
                             text: selected_worker_barcode;
-                            font-size: 18px;
                         }
                     }
 
-                    HorizontalBox {
-                        Button {
+                    Horizontal {
+                        FilledButton {
                             text: "Save";
                             clicked => {
                                 edit_worker(selected_worker, edit-name.text, edit-barcode.text);
@@ -391,12 +389,6 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
-            }
-
-            Text {
-                text: error_message;
-                color: #ff0000;
-                font-size: 18px;
             }
         }
     }

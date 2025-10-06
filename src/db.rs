@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Result};
 
+#[derive(Clone)]
 pub struct Worker {
     pub id: i64,
     pub name: String,
