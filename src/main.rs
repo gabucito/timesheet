@@ -77,11 +77,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     .with_timezone(&Santiago)
                                                     .format("%H:%M:%S")
                                                     .to_string(),
-                                                slint::Color::from_rgb_u8(0, 255, 0),
-                                            ) // Green for completed
+                                                slint::Color::from_argb_u8(0, 0, 0, 0),
+                                            ) // Transparent for completed
                                         } else {
                                             (
-                                                "In Progress".to_string(),
+                                                "En Progreso".to_string(),
                                                 slint::Color::from_rgb_u8(255, 165, 0),
                                             ) // Orange for ongoing
                                         };
@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             .num_seconds()
                                             as f64
                                             / 3600.0;
-                                        format!("{} (ongoing)", format_hours(hours))
+                                        format!("{} (en curso)", format_hours(hours))
                                     };
 
                                     TimesheetDisplay {
@@ -226,19 +226,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_reports(Rc::new(slint::VecModel::from(report_items)).into());
         }
         Err(e) => {
-            ui.set_error_message(format!("Failed to load workers: {}", e).into());
+            ui.set_error_message(format!("Error al cargar trabajadores: {}", e).into());
         }
     }
 
     // Handle barcode input
     let conn_clone2 = conn.clone();
     ui.on_barcode_scanned(move |barcode_str| {
+        println!("Barcode scanned callback triggered with: '{}'", barcode_str);
         // Check if enough time has passed since last scan (5 seconds cooldown)
         let now = chrono::Utc::now();
         {
             let mut last_scan = LAST_SCAN_TIME.lock().unwrap();
             if let Some(last_time) = *last_scan {
                 if now.signed_duration_since(last_time) < chrono::Duration::seconds(5) {
+                    println!("Scan ignored - too soon after last scan");
                     return; // Ignore scan, too soon after last one
                 }
             }
@@ -246,30 +248,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let conn = conn_clone2.borrow();
+        println!("Looking up worker with barcode: '{}'", barcode_str);
         let worker_result = db::get_worker_by_barcode(&*conn, &barcode_str);
         match worker_result {
             Ok(Some(worker)) => {
+                println!("Worker found: {} (ID: {})", worker.name, worker.id);
                 let status_result = db::get_current_status(&*conn, worker.id);
                 match status_result {
                     Ok(Some(_)) => {
+                        // Worker is currently clocked in, perform clock out
                         if let Err(e) = db::clock_out(&*conn, worker.id) {
                             if let Some(ui) = ui_handle_barcode.upgrade() {
-                                ui.set_error_message(format!("Failed to clock out: {}", e).into());
+                                ui.set_error_message(
+                                    format!("Error al marcar salida: {}", e).into(),
+                                );
                             }
                             return;
                         }
+                        // Show notification
+                        if let Some(ui) = ui_handle_barcode.upgrade() {
+                            println!("Showing notification dialog for clock out: {}", worker.name);
+                            ui.set_confirm_worker_name(worker.name.into());
+                            ui.set_confirm_action("Salida registrada".into());
+                            ui.set_show_confirm_dialog(true);
+                            ui.set_trigger_dialog_show(true);
+                        }
                     }
                     Ok(None) => {
+                        // Worker is not clocked in, perform clock in
                         if let Err(e) = db::clock_in(&*conn, worker.id) {
                             if let Some(ui) = ui_handle_barcode.upgrade() {
-                                ui.set_error_message(format!("Failed to clock in: {}", e).into());
+                                ui.set_error_message(
+                                    format!("Error al marcar entrada: {}", e).into(),
+                                );
                             }
                             return;
+                        }
+                        // Show notification
+                        if let Some(ui) = ui_handle_barcode.upgrade() {
+                            println!("Showing notification dialog for clock in: {}", worker.name);
+                            ui.set_confirm_worker_name(worker.name.into());
+                            ui.set_confirm_action("Entrada registrada".into());
+                            ui.set_show_confirm_dialog(true);
+                            ui.set_trigger_dialog_show(true);
                         }
                     }
                     Err(e) => {
                         if let Some(ui) = ui_handle_barcode.upgrade() {
-                            ui.set_error_message(format!("Failed to get status: {}", e).into());
+                            ui.set_error_message(format!("Error al obtener estado: {}", e).into());
                         }
                         return;
                     }
@@ -280,13 +306,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 refresh_workers(&conn_clone2, &ui_handle_barcode);
             }
             Ok(None) => {
+                println!("Worker not found for barcode: '{}'", barcode_str);
                 if let Some(ui) = ui_handle_barcode.upgrade() {
-                    ui.set_error_message("Worker not found".into());
+                    ui.set_error_message("Trabajador no encontrado".into());
                 }
             }
             Err(e) => {
+                println!("Error looking up worker: {}", e);
                 if let Some(ui) = ui_handle_barcode.upgrade() {
-                    ui.set_error_message(format!("Error finding worker: {}", e).into());
+                    ui.set_error_message(format!("Error al buscar trabajador: {}", e).into());
                 }
             }
         }
@@ -308,13 +336,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     if let Some(ui) = ui_handle_add.upgrade() {
-                        ui.set_error_message(format!("Failed to add worker: {}", e).into());
+                        ui.set_error_message(format!("Error al agregar trabajador: {}", e).into());
                     }
                 }
             }
         } else {
             if let Some(ui) = ui_handle_add.upgrade() {
-                ui.set_error_message("Name and barcode are required".into());
+                ui.set_error_message("El nombre y código de barras son obligatorios".into());
             }
         }
     });
@@ -340,23 +368,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Err(e) => {
                                 if let Some(ui) = ui_handle_edit.upgrade() {
                                     ui.set_error_message(
-                                        format!("Failed to update worker: {}", e).into(),
+                                        format!("Error al actualizar trabajador: {}", e).into(),
                                     );
                                 }
                             }
                         }
                     } else {
                         if let Some(ui) = ui_handle_edit.upgrade() {
-                            ui.set_error_message("Worker not found".into());
+                            ui.set_error_message("Trabajador no encontrado".into());
                         }
                     }
                 }
                 Err(e) => {
                     if let Some(ui) = ui_handle_edit.upgrade() {
-                        ui.set_error_message(format!("Failed to get workers: {}", e).into());
+                        ui.set_error_message(
+                            format!("Error al obtener trabajadores: {}", e).into(),
+                        );
                     }
                 }
             }
+        }
+    });
+
+    // Handle notification dialog close
+    let ui_handle_confirm = ui_handle.clone();
+    ui.on_confirm_check_action(move |_| {
+        // Hide dialog
+        if let Some(ui) = ui_handle_confirm.upgrade() {
+            ui.set_show_confirm_dialog(false);
         }
     });
 
@@ -426,11 +465,11 @@ fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &slint::
                                                         .with_timezone(&Santiago)
                                                         .format("%H:%M:%S")
                                                         .to_string(),
-                                                    slint::Color::from_rgb_u8(0, 255, 0),
-                                                ) // Green for completed
+                                                    slint::Color::from_argb_u8(0, 0, 0, 0),
+                                                ) // Transparent for completed
                                             } else {
                                                 (
-                                                    "In Progress".to_string(),
+                                                    "En Progreso".to_string(),
                                                     slint::Color::from_rgb_u8(255, 165, 0),
                                                 ) // Orange for ongoing
                                             };
@@ -445,7 +484,7 @@ fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &slint::
                                                 .num_seconds()
                                                 as f64
                                                 / 3600.0;
-                                            format!("{} (ongoing)", format_hours(hours))
+                                            format!("{} (en curso)", format_hours(hours))
                                         };
 
                                         TimesheetDisplay {
@@ -540,7 +579,7 @@ fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &slint::
                 ui.set_reports(Rc::new(slint::VecModel::from(report_items)).into());
             }
             Err(e) => {
-                ui.set_error_message(format!("Failed to refresh workers: {}", e).into());
+                ui.set_error_message(format!("Error al actualizar trabajadores: {}", e).into());
             }
         }
     }

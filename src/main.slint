@@ -80,6 +80,36 @@ export component MainWindow inherits MaterialWindow {
     in-out property <bool> show_reports: false;
     in-out property <bool> show_workers_tab: false;
 
+    // Confirmation dialog properties
+    in-out property <string> confirm_worker_name: "";
+    in-out property <string> confirm_action: "";
+    in-out property <bool> show_confirm_dialog: false;
+    in-out property <bool> trigger_dialog_show: false;
+
+    // Auto-close timer for confirmation dialog
+    auto-close-timer := Timer {
+        interval: 3s;
+        running: false;
+        triggered => {
+            show_confirm_dialog = false;
+            confirmation-dialog.close();
+        }
+    }
+
+    // Show dialog timer - triggers immediately when dialog should be shown
+    show-dialog-timer := Timer {
+        interval: 1ms;
+        running: trigger_dialog_show;
+        triggered => {
+            if show_confirm_dialog {
+                confirmation-dialog.show();
+                auto-close-timer.running = true;
+            }
+            // Reset the trigger
+            trigger_dialog_show = false;
+        }
+    }
+
     property <int> current_tab: root.show_time ? 0 : root.show_reports ? 1 : 2;
     property <[NavigationItem]> nav_items: [
         { icon: @image-url("../material-1.0/ui/icons/schedule.svg"), text: "Time" },
@@ -91,6 +121,8 @@ export component MainWindow inherits MaterialWindow {
     callback add_worker(string, string);
     callback edit_worker(string, string, string);
     callback date_changed();
+    callback confirm_check_action(bool); // true for confirm, false for cancel
+    callback show_notification_dialog();
 
     date-picker := DatePickerPopup {
         x: (root.width - self.width) / 2;
@@ -107,15 +139,59 @@ export component MainWindow inherits MaterialWindow {
         }
     }
 
+    confirmation-dialog := PopupWindow {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 400px;
+        height: 150px;
+        visible: show_confirm_dialog;
+
+        Rectangle {
+            background: #ffffff;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #cccccc;
+
+            Vertical {
+                padding: 20px;
+                spacing: 15px;
+
+                MaterialText {
+                    text: confirm_worker_name + " - " + confirm_action;
+                    font-size: 18px;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                }
+
+                Horizontal {
+                    alignment: center;
+
+                    FilledButton {
+                        text: "Aceptar";
+                        clicked => {
+                            auto-close-timer.running = false;
+                            show_confirm_dialog = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     FocusScope {
         key-pressed(event) => {
-            if event.text == "\n" {
-                barcode_scanned(barcode_input);
-                barcode_input = "";
-            } else {
-                barcode_input += event.text;
+            if show_time {
+                debug("Barcode key pressed: '{}'", event.text);
+                if event.text == "\n" {
+                    debug("Newline detected, calling barcode_scanned with: '{}'", barcode_input);
+                    barcode_scanned(barcode_input);
+                    barcode_input = "";
+                } else {
+                    barcode_input += event.text;
+                }
+                return accept;
             }
-            return accept;
+            return reject;
         }
 
         Vertical {
@@ -128,6 +204,10 @@ export component MainWindow inherits MaterialWindow {
                     show_time = index == 0;
                     show_reports = index == 1;
                     show_workers_tab = index == 2;
+                    // Focus the barcode input area when switching to time tab
+                    if show_time {
+                        // The FocusScope should automatically get focus
+                    }
                 }
             }
 
@@ -163,33 +243,33 @@ export component MainWindow inherits MaterialWindow {
                     width: root.width * 2 / 3;
                     Horizontal {
                         MaterialText {
-                            text: "Name";
+                            text: "Nombre";
                             horizontal-alignment: center;
-                            width: 200px;
+                            width: 250px;
                             font-weight: 700;
                             font-size: 20px;
                         }
 
                         MaterialText {
-                            text: "Checked In";
+                            text: "Entrada";
                             horizontal-alignment: center;
-                            width: 200px;
+                            width: 250px;
                             font-weight: 700;
                             font-size: 20px;
                         }
 
                         MaterialText {
-                            text: "Checked Out";
+                            text: "Salida";
                             horizontal-alignment: center;
-                            width: 200px;
+                            width: 250px;
                             font-weight: 700;
                             font-size: 20px;
                         }
 
                         MaterialText {
-                            text: "Duration";
+                            text: "Duración";
                             horizontal-alignment: center;
-                            width: 200px;
+                            width: 250px;
                             font-weight: 700;
                             font-size: 20px;
                         }
@@ -197,38 +277,40 @@ export component MainWindow inherits MaterialWindow {
 
                     ListView {
                         for worker in workers: Vertical {
+                            spacing: 0px;
+                            padding: 0px;
                             Rectangle {
                                 background: worker.color;
                                 Horizontal {
                                     MaterialText {
                                         text: worker.show_name ? worker.name : "";
                                         horizontal-alignment: center;
-                                        width: 200px;
-                                        font-size: 18px;
+                                        width: 250px;
+                                        font-size: 24px;
                                         color: worker.color == #ff0000 ? #ffffff : #000000;
                                     }
 
                                     MaterialText {
                                         text: worker.checked_in_time;
                                         horizontal-alignment: center;
-                                        width: 150px;
-                                        font-size: 18px;
+                                        width: 250px;
+                                        font-size: 24px;
                                         color: worker.color == #ff0000 ? #ffffff : #000000;
                                     }
 
                                     MaterialText {
                                         text: worker.checked_out_time;
                                         horizontal-alignment: center;
-                                        width: 150px;
-                                        font-size: 18px;
+                                        width: 250px;
+                                        font-size: 24px;
                                         color: worker.color == #ff0000 ? #ffffff : #000000;
                                     }
 
                                     MaterialText {
                                         text: worker.current_total_hours;
                                         horizontal-alignment: center;
-                                        width: 120px;
-                                        font-size: 18px;
+                                        width: 250px;
+                                        font-size: 24px;
                                         color: worker.color == #ff0000 ? #ffffff : #000000;
                                     }
                                 }
@@ -242,149 +324,150 @@ export component MainWindow inherits MaterialWindow {
                         }
                     }
                 }
-            }
-            if show_reports: Vertical {
-                Horizontal {
-                    FilledButton {
-                        text: @tr("Elija la fecha");
 
-                        clicked => {
-                            date_picker.show();
-                        }
-                    }
-                }
+                if show_reports: Vertical {
+                    Horizontal {
+                        FilledButton {
+                            text: @tr("Elija la fecha");
 
-                Horizontal {
-                    MaterialText {
-                        text: "Worker";
-                        horizontal-alignment: center;
-                        width: 300px;
-                        font-weight: 700;
-                        font-size: 18px;
-                    }
-
-                    MaterialText {
-                        text: "Daily";
-                        horizontal-alignment: center;
-                        width: 200px;
-                        font-weight: 700;
-                        font-size: 18px;
-                    }
-
-                    MaterialText {
-                        text: "Weekly";
-                        horizontal-alignment: center;
-                        width: 200px;
-                        font-weight: 700;
-                        font-size: 18px;
-                    }
-
-                    MaterialText {
-                        text: "Monthly";
-                        horizontal-alignment: center;
-                        width: 200px;
-                        font-weight: 700;
-                        font-size: 18px;
-                    }
-                }
-
-                ListView {
-                    for report in reports: Horizontal {
-                        MaterialText {
-                            text: report.name;
-                            horizontal-alignment: center;
-                            width: 300px;
-                            font-size: 16px;
-                        }
-
-                        MaterialText {
-                            text: report.daily_hours;
-                            horizontal-alignment: center;
-                            width: 200px;
-                            font-size: 16px;
-                        }
-
-                        MaterialText {
-                            text: report.weekly_hours;
-                            horizontal-alignment: center;
-                            width: 200px;
-                            font-size: 16px;
-                        }
-
-                        MaterialText {
-                            text: report.monthly_hours;
-                            horizontal-alignment: center;
-                            width: 200px;
-                            font-size: 16px;
-                        }
-                    }
-                }
-            }
-
-            if show_workers_tab: Vertical {
-                Horizontal {
-                    MaterialText {
-                        text: "Add Worker:";
-                        font-size: 18px;
-                    }
-
-                    add-name := TextField {
-                        placeholder_text: "Name";
-                    }
-
-                    add-barcode := TextField {
-                        placeholder_text: "Barcode";
-                    }
-
-                    FilledButton {
-                        text: "Add";
-                        clicked => {
-                            add_worker(add-name.text, add-barcode.text);
-                            add-name.text = "";
-                            add-barcode.text = "";
-                        }
-                    }
-                }
-
-                ListView {
-                    for worker in management_workers: TouchArea {
-                        Vertical {
-                            MaterialText {
-                                text: worker.name;
-                                font-size: 18px;
+                            clicked => {
+                                date_picker.show();
                             }
                         }
-
-                        clicked => {
-                            selected_worker = worker.name;
-                            selected_worker_barcode = worker.barcode;
-                        }
                     }
-                }
 
-                if selected_worker != "": Vertical {
                     Horizontal {
                         MaterialText {
-                            text: "Edit Worker:";
+                            text: "Worker";
+                            horizontal-alignment: center;
+                            width: 300px;
+                            font-weight: 700;
                             font-size: 18px;
                         }
 
-                        edit-name := TextField {
-                            text: selected_worker;
+                        MaterialText {
+                            text: "Daily";
+                            horizontal-alignment: center;
+                            width: 200px;
+                            font-weight: 700;
+                            font-size: 18px;
                         }
 
-                        edit-barcode := TextField {
-                            text: selected_worker_barcode;
+                        MaterialText {
+                            text: "Weekly";
+                            horizontal-alignment: center;
+                            width: 200px;
+                            font-weight: 700;
+                            font-size: 18px;
+                        }
+
+                        MaterialText {
+                            text: "Monthly";
+                            horizontal-alignment: center;
+                            width: 200px;
+                            font-weight: 700;
+                            font-size: 18px;
                         }
                     }
 
+                    ListView {
+                        for report in reports: Horizontal {
+                            MaterialText {
+                                text: report.name;
+                                horizontal-alignment: center;
+                                width: 300px;
+                                font-size: 16px;
+                            }
+
+                            MaterialText {
+                                text: report.daily_hours;
+                                horizontal-alignment: center;
+                                width: 200px;
+                                font-size: 16px;
+                            }
+
+                            MaterialText {
+                                text: report.weekly_hours;
+                                horizontal-alignment: center;
+                                width: 200px;
+                                font-size: 16px;
+                            }
+
+                            MaterialText {
+                                text: report.monthly_hours;
+                                horizontal-alignment: center;
+                                width: 200px;
+                                font-size: 16px;
+                            }
+                        }
+                    }
+                }
+
+                if show_workers_tab: Vertical {
                     Horizontal {
+                        MaterialText {
+                            text: "Add Worker:";
+                            font-size: 18px;
+                        }
+
+                        add-name := TextField {
+                            placeholder_text: "Name";
+                        }
+
+                        add-barcode := TextField {
+                            placeholder_text: "Barcode";
+                        }
+
                         FilledButton {
-                            text: "Save";
+                            text: "Add";
                             clicked => {
-                                edit_worker(selected_worker, edit-name.text, edit-barcode.text);
-                                selected_worker = "";
-                                selected_worker_barcode = "";
+                                add_worker(add-name.text, add-barcode.text);
+                                add-name.text = "";
+                                add-barcode.text = "";
+                            }
+                        }
+                    }
+
+                    ListView {
+                        for worker in management_workers: TouchArea {
+                            Vertical {
+                                MaterialText {
+                                    text: worker.name;
+                                    font-size: 18px;
+                                }
+                            }
+
+                            clicked => {
+                                selected_worker = worker.name;
+                                selected_worker_barcode = worker.barcode;
+                            }
+                        }
+                    }
+
+                    if selected_worker != "": Vertical {
+                        Horizontal {
+                            MaterialText {
+                                text: "Edit Worker:";
+                                font-size: 18px;
+                            }
+
+                            edit-name := TextField {
+                                text: selected_worker;
+                            }
+
+                            edit-barcode := TextField {
+                                text: selected_worker_barcode;
+                            }
+                        }
+
+                        Horizontal {
+                            FilledButton {
+                                text: "Save";
+                                clicked => {
+                                    edit_worker(selected_worker, edit-name.text, edit-barcode.text);
+                                    selected_worker = "";
+                                    selected_worker_barcode = "";
+                                }
                             }
                         }
                     }
