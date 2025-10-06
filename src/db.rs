@@ -134,27 +134,46 @@ pub fn get_current_status(conn: &Connection, worker_id: i64) -> Result<Option<Ti
 }
 
 // Reporting functions
-pub fn get_daily_hours(conn: &Connection, worker_id: i64, date: &str) -> Result<f64> {
+pub fn get_daily_timesheet_entries(
+    conn: &Connection,
+    worker_id: i64,
+    date: &str,
+) -> Result<Vec<TimesheetEntry>> {
     let mut stmt = conn.prepare(
-        "SELECT clock_in, clock_out FROM timesheets WHERE worker_id = ? AND date(clock_in) = ?",
+        "SELECT id, worker_id, clock_in, clock_out FROM timesheets WHERE worker_id = ? AND date(clock_in) = ? ORDER BY clock_in",
     )?;
-    let mut rows = stmt.query(rusqlite::params![worker_id, date])?;
+    let entry_iter = stmt.query_map(rusqlite::params![worker_id, date], |row| {
+        let clock_out: Option<String> = row.get(3)?;
+        Ok(TimesheetEntry {
+            id: row.get(0)?,
+            worker_id: row.get(1)?,
+            clock_in: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                .expect("Invalid time")
+                .with_timezone(&Utc),
+            clock_out: if let Some(out) = clock_out {
+                Some(
+                    DateTime::parse_from_rfc3339(&out)
+                        .expect("Invalid time")
+                        .with_timezone(&Utc),
+                )
+            } else {
+                None
+            },
+        })
+    })?;
+    entry_iter.collect()
+}
+
+pub fn get_daily_hours(conn: &Connection, worker_id: i64, date: &str) -> Result<f64> {
+    let entries = get_daily_timesheet_entries(conn, worker_id, date)?;
     let mut total_hours = 0.0;
     let now = Utc::now();
-    while let Some(row) = rows.next()? {
-        let clock_in: String = row.get(0)?;
-        let clock_out: Option<String> = row.get(1)?;
-        let in_time = DateTime::parse_from_rfc3339(&clock_in)
-            .expect("Invalid time")
-            .with_timezone(&Utc);
-        if let Some(out) = clock_out {
-            let out_time = DateTime::parse_from_rfc3339(&out)
-                .expect("Invalid time")
-                .with_timezone(&Utc);
-            total_hours += (out_time - in_time).num_seconds() as f64 / 3600.0;
+    for entry in entries {
+        if let Some(out_time) = entry.clock_out {
+            total_hours += (out_time - entry.clock_in).num_seconds() as f64 / 3600.0;
         } else {
             // Ongoing session
-            total_hours += (now - in_time).num_seconds() as f64 / 3600.0;
+            total_hours += (now - entry.clock_in).num_seconds() as f64 / 3600.0;
         }
     }
     Ok(total_hours)

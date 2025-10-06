@@ -4,6 +4,7 @@ use chrono::{Datelike, Weekday};
 use chrono_tz::America::Santiago;
 use slint::SharedString;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Mutex;
 
@@ -15,8 +16,9 @@ static LAST_SCAN_TIME: Mutex<Option<chrono::DateTime<chrono::Utc>>> = Mutex::new
 struct WorkerDisplay {
     id: i64,
     name: String,
-    status: String,
-    time: String,
+    clock_in_time: String,
+    clock_out_time: String,
+    duration: String,
     color: slint::Color,
 }
 
@@ -34,6 +36,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_error_message("".into());
     let now = chrono::Utc::now();
     ui.set_selected_date(now.format("%Y-%m-%d").to_string().into());
+
+    // Initialize current time display
+    let santiago_time = now.with_timezone(&Santiago);
+    ui.set_current_time_display(santiago_time.format("%H:%M:%S").to_string().into());
     let ui_handle = ui.as_weak();
     let ui_handle_barcode = ui_handle.clone();
     let ui_handle_add = ui_handle.clone();
@@ -43,55 +49,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match db::get_workers(&conn.borrow()) {
         Ok(workers) => {
             let mut worker_displays = Vec::new();
+            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+            let mut shown_workers = HashSet::new();
+
             for worker in &workers {
-                let status = match db::get_current_status(&conn.borrow(), worker.id) {
-                    Ok(Some(entry)) => {
-                        WorkerDisplay {
-                            id: worker.id,
-                            name: worker.name.clone(),
-                            status: "Clocked In".to_string(),
-                            time: entry
+                // Get all timesheet entries for today
+                match db::get_daily_timesheet_entries(&conn.borrow(), worker.id, &today) {
+                    Ok(entries) => {
+                        let is_first_entry = !shown_workers.contains(&worker.id);
+                        if is_first_entry {
+                            shown_workers.insert(worker.id);
+                        }
+
+                        for (index, entry) in entries.iter().enumerate() {
+                            let display_name = if is_first_entry && index == 0 {
+                                worker.name.clone()
+                            } else {
+                                "".to_string()
+                            };
+
+                            let clock_in_time = entry
                                 .clock_in
                                 .with_timezone(&Santiago)
                                 .format("%H:%M:%S")
-                                .to_string(),
-                            color: slint::Color::from_rgb_u8(0, 255, 0), // Green
-                        }
-                    }
-                    Ok(None) => {
-                        // Check last clock out
-                        let last_out = match get_last_clock_out(&conn.borrow(), worker.id) {
-                            Ok(l) => l,
-                            Err(_) => None,
-                        };
-                        WorkerDisplay {
-                            id: worker.id,
-                            name: worker.name.clone(),
-                            status: "Clocked Out".to_string(),
-                            time: last_out.unwrap_or_else(|| "N/A".to_string()),
-                            color: slint::Color::from_rgb_u8(255, 0, 0), // Red
+                                .to_string();
+
+                            let (clock_out_time, color) = if let Some(out_time) = entry.clock_out {
+                                (
+                                    out_time
+                                        .with_timezone(&Santiago)
+                                        .format("%H:%M:%S")
+                                        .to_string(),
+                                    slint::Color::from_rgb_u8(0, 255, 0),
+                                ) // Green for completed
+                            } else {
+                                (
+                                    "In Progress".to_string(),
+                                    slint::Color::from_rgb_u8(255, 165, 0),
+                                ) // Orange for ongoing
+                            };
+
+                            let duration = if let Some(out_time) = entry.clock_out {
+                                let hours =
+                                    (out_time - entry.clock_in).num_seconds() as f64 / 3600.0;
+                                format_hours(hours)
+                            } else {
+                                let hours = (chrono::Utc::now() - entry.clock_in).num_seconds()
+                                    as f64
+                                    / 3600.0;
+                                format!("{} (ongoing)", format_hours(hours))
+                            };
+
+                            let display = WorkerDisplay {
+                                id: worker.id,
+                                name: display_name,
+                                clock_in_time,
+                                clock_out_time,
+                                duration,
+                                color,
+                            };
+                            worker_displays.push(display);
                         }
                     }
                     Err(_) => {
-                        WorkerDisplay {
-                            id: worker.id,
-                            name: worker.name.clone(),
-                            status: "Error".to_string(),
-                            time: "N/A".to_string(),
-                            color: slint::Color::from_rgb_u8(255, 255, 0), // Yellow
+                        if !shown_workers.contains(&worker.id) {
+                            shown_workers.insert(worker.id);
+                            // No entries for today, show empty row with name
+                            let display = WorkerDisplay {
+                                id: worker.id,
+                                name: worker.name.clone(),
+                                clock_in_time: "".to_string(),
+                                clock_out_time: "".to_string(),
+                                duration: "0:00".to_string(),
+                                color: slint::Color::from_rgb_u8(200, 200, 200), // Gray
+                            };
+                            worker_displays.push(display);
                         }
                     }
-                };
-                worker_displays.push(status);
+                }
             }
 
             let worker_items: Vec<WorkerItem> = worker_displays
                 .into_iter()
-                .zip(&workers)
+                .zip(workers.iter().cycle())
                 .map(|(w, worker)| WorkerItem {
                     name: SharedString::from(w.name),
-                    status: SharedString::from(w.status),
-                    time: SharedString::from(w.time),
+                    checked_in_time: SharedString::from(w.clock_in_time),
+                    checked_out_time: SharedString::from(w.clock_out_time),
+                    current_total_hours: SharedString::from(w.duration),
                     color: w.color,
                     barcode: SharedString::from(worker.barcode.clone()),
                 })
@@ -292,6 +338,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         refresh_workers(&conn_clone_date, &ui_handle_date);
     });
 
+    // Set up timer to refresh ongoing hours every 10 seconds
+    let conn_clone_worker_timer = conn.clone();
+    let ui_handle_worker_timer = ui_handle.clone();
+    let worker_timer = slint::Timer::default();
+    worker_timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_secs(10),
+        move || {
+            refresh_workers(&conn_clone_worker_timer, &ui_handle_worker_timer);
+        },
+    );
+
+    // Set up timer to update current time every second
+    let ui_handle_time_timer = ui_handle.clone();
+    let time_timer = slint::Timer::default();
+    time_timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_secs(1),
+        move || {
+            if let Some(ui) = ui_handle_time_timer.upgrade() {
+                let now = chrono::Utc::now().with_timezone(&Santiago);
+                ui.set_current_time_display(now.format("%H:%M:%S").to_string().into());
+            }
+        },
+    );
+
     ui.run()?;
     Ok(())
 }
@@ -302,49 +374,79 @@ fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &slint::
         match db::get_workers(&*conn_ref) {
             Ok(workers) => {
                 let mut worker_displays = Vec::new();
+                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
                 for worker in &workers {
-                    let status = match db::get_current_status(&*conn_ref, worker.id) {
-                        Ok(Some(entry)) => WorkerDisplay {
-                            id: worker.id,
-                            name: worker.name.clone(),
-                            status: "Clocked In".to_string(),
-                            time: entry
-                                .clock_in
-                                .with_timezone(&Santiago)
-                                .format("%H:%M:%S")
-                                .to_string(),
-                            color: slint::Color::from_rgb_u8(0, 255, 0),
-                        },
-                        Ok(None) => {
-                            let last_out = match get_last_clock_out(&*conn_ref, worker.id) {
-                                Ok(l) => l,
-                                Err(_) => None,
-                            };
-                            WorkerDisplay {
-                                id: worker.id,
-                                name: worker.name.clone(),
-                                status: "Clocked Out".to_string(),
-                                time: last_out.unwrap_or_else(|| "N/A".to_string()),
-                                color: slint::Color::from_rgb_u8(255, 0, 0),
+                    // Get all timesheet entries for today
+                    match db::get_daily_timesheet_entries(&*conn_ref, worker.id, &today) {
+                        Ok(entries) => {
+                            for entry in entries {
+                                let clock_in_time = entry
+                                    .clock_in
+                                    .with_timezone(&Santiago)
+                                    .format("%H:%M:%S")
+                                    .to_string();
+
+                                let (clock_out_time, color) =
+                                    if let Some(out_time) = entry.clock_out {
+                                        (
+                                            out_time
+                                                .with_timezone(&Santiago)
+                                                .format("%H:%M:%S")
+                                                .to_string(),
+                                            slint::Color::from_rgb_u8(0, 255, 0),
+                                        ) // Green for completed
+                                    } else {
+                                        (
+                                            "In Progress".to_string(),
+                                            slint::Color::from_rgb_u8(255, 165, 0),
+                                        ) // Orange for ongoing
+                                    };
+
+                                let duration = if let Some(out_time) = entry.clock_out {
+                                    let hours =
+                                        (out_time - entry.clock_in).num_seconds() as f64 / 3600.0;
+                                    format_hours(hours)
+                                } else {
+                                    let hours = (chrono::Utc::now() - entry.clock_in).num_seconds()
+                                        as f64
+                                        / 3600.0;
+                                    format!("{} (ongoing)", format_hours(hours))
+                                };
+
+                                let display = WorkerDisplay {
+                                    id: worker.id,
+                                    name: worker.name.clone(),
+                                    clock_in_time,
+                                    clock_out_time,
+                                    duration,
+                                    color,
+                                };
+                                worker_displays.push(display);
                             }
                         }
-                        Err(_) => WorkerDisplay {
-                            id: worker.id,
-                            name: worker.name.clone(),
-                            status: "Error".to_string(),
-                            time: "N/A".to_string(),
-                            color: slint::Color::from_rgb_u8(255, 255, 0),
-                        },
-                    };
-                    worker_displays.push(status);
+                        Err(_) => {
+                            // No entries for today, show empty row
+                            let display = WorkerDisplay {
+                                id: worker.id,
+                                name: worker.name.clone(),
+                                clock_in_time: "".to_string(),
+                                clock_out_time: "".to_string(),
+                                duration: "0:00".to_string(),
+                                color: slint::Color::from_rgb_u8(200, 200, 200), // Gray
+                            };
+                            worker_displays.push(display);
+                        }
+                    }
                 }
                 let worker_items: Vec<WorkerItem> = worker_displays
                     .into_iter()
-                    .zip(&workers)
+                    .zip(workers.iter().cycle())
                     .map(|(w, worker)| WorkerItem {
                         name: SharedString::from(w.name),
-                        status: SharedString::from(w.status),
-                        time: SharedString::from(w.time),
+                        checked_in_time: SharedString::from(w.clock_in_time),
+                        checked_out_time: SharedString::from(w.clock_out_time),
+                        current_total_hours: SharedString::from(w.duration),
                         color: w.color,
                         barcode: SharedString::from(worker.barcode.clone()),
                     })

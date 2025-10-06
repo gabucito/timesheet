@@ -2,8 +2,9 @@ import { Button, ListView, VerticalBox, HorizontalBox, LineEdit, ComboBox, DateP
 
 struct WorkerItem {
     name: string,
-    status: string,
-    time: string,
+    checked_in_time: string,
+    checked_out_time: string,
+    current_total_hours: string,
     color: color,
     barcode: string,
 }
@@ -64,6 +65,7 @@ export component MainWindow inherits Window {
     in-out property <string> selected_worker: "";
     in-out property <string> selected_worker_barcode: "";
     in-out property <string> selected_date;
+    in-out property <string> current_time_display: "";
     in-out property <string> error_message: "";
 
     in-out property <bool> show_time: true;
@@ -105,6 +107,7 @@ export component MainWindow inherits Window {
             HorizontalBox {
                 Button {
                     text: "Time";
+                    height: 30px;
                     clicked => {
                         show_time = true;
                         show_reports = false;
@@ -114,6 +117,7 @@ export component MainWindow inherits Window {
 
                 Button {
                     text: "Reports";
+                    height: 30px;
                     clicked => {
                         show_time = false;
                         show_reports = true;
@@ -123,6 +127,7 @@ export component MainWindow inherits Window {
 
                 Button {
                     text: "Workers";
+                    height: 30px;
                     clicked => {
                         show_time = false;
                         show_reports = false;
@@ -131,12 +136,108 @@ export component MainWindow inherits Window {
                 }
             }
 
-            if show_time: ListView {
-                for worker in workers: WorkerTile {
-                    name: worker.name;
-                    status: worker.status;
-                    time: worker.time;
-                    background_color: worker.color;
+            if show_time: HorizontalBox {
+                // Current time display on the left (1/3 width)
+                Rectangle {
+                    width: root.width / 3;
+                    VerticalBox {
+                        Text {
+                            text: "Current Time";
+                            horizontal-alignment: center;
+                            font-size: 24px;
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: current_time_display;
+                            horizontal-alignment: center;
+                            font-size: 72px;
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: "Santiago, Chile";
+                            horizontal-alignment: center;
+                            font-size: 18px;
+                        }
+                    }
+                }
+
+                // Worker table on the right (2/3 width)
+                VerticalBox {
+                    width: root.width * 2 / 3;
+                    HorizontalBox {
+                        Text {
+                            text: "Name";
+                            horizontal-alignment: center;
+                            width: 150px;
+                            font-weight: 700;
+                            font-size: 20px;
+                        }
+
+                        Text {
+                            text: "Checked In";
+                            horizontal-alignment: center;
+                            width: 120px;
+                            font-weight: 700;
+                            font-size: 20px;
+                        }
+
+                        Text {
+                            text: "Checked Out";
+                            horizontal-alignment: center;
+                            width: 120px;
+                            font-weight: 700;
+                            font-size: 20px;
+                        }
+
+                        Text {
+                            text: "Duration";
+                            horizontal-alignment: center;
+                            width: 100px;
+                            font-weight: 700;
+                            font-size: 20px;
+                        }
+                    }
+
+                    ListView {
+                        for worker in workers: Rectangle {
+                            background: worker.color;
+                            HorizontalBox {
+                                Text {
+                                    text: worker.name;
+                                    horizontal-alignment: center;
+                                    width: 150px;
+                                    font-size: 18px;
+                                    color: worker.color == #ff0000 ? #ffffff : #000000;
+                                }
+
+                                Text {
+                                    text: worker.checked_in_time;
+                                    horizontal-alignment: center;
+                                    width: 120px;
+                                    font-size: 18px;
+                                    color: worker.color == #ff0000 ? #ffffff : #000000;
+                                }
+
+                                Text {
+                                    text: worker.checked_out_time;
+                                    horizontal-alignment: center;
+                                    width: 120px;
+                                    font-size: 18px;
+                                    color: worker.color == #ff0000 ? #ffffff : #000000;
+                                }
+
+                                Text {
+                                    text: worker.current_total_hours;
+                                    horizontal-alignment: center;
+                                    width: 100px;
+                                    font-size: 18px;
+                                    color: worker.color == #ff0000 ? #ffffff : #000000;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
