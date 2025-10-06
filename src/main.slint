@@ -1,24 +1,94 @@
-import { Button, ListView, VerticalBox, HorizontalBox, LineEdit } from "std-widgets.slint";
+import { Button, ListView, VerticalBox, HorizontalBox, LineEdit, ComboBox, DatePickerPopup } from "std-widgets.slint";
 
 struct WorkerItem {
     name: string,
     status: string,
     time: string,
     color: color,
+    barcode: string,
+}
+
+struct ReportItem {
+    name: string,
+    daily_hours: string,
+    weekly_hours: string,
+    monthly_hours: string,
+}
+
+component WorkerTile inherits Rectangle {
+    width: 450px;
+    height: 60px;
+
+    in property <string> name;
+    in property <string> status;
+    in property <string> time;
+    in property <color> background_color;
+
+    background: background_color;
+    HorizontalBox {
+        Text {
+            text: name;
+            font-size: 20px;
+            color: background_color == #ff0000 ? #ffffff : #000000;
+            horizontal-alignment: center;
+            width: 150px;
+        }
+
+        Text {
+            text: status;
+            font-size: 18px;
+            color: background_color == #ff0000 ? #ffffff : #000000;
+            horizontal-alignment: center;
+            width: 120px;
+        }
+
+        Text {
+            text: time;
+            font-size: 18px;
+            color: background_color == #ff0000 ? #ffffff : #000000;
+            horizontal-alignment: center;
+            width: 120px;
+        }
+    }
 }
 
 export component MainWindow inherits Window {
     title: "Timesheet";
-    width: 800px;
-    height: 600px;
+    width: 1920px;
+    height: 1080px;
 
-    in-out property<[WorkerItem]> workers: [];
-    property<string> barcode_input: "";
+    in-out property <[WorkerItem]> workers: [];
+    property <string> barcode_input: "";
+    in-out property <[string]> worker_names: [];
+    in-out property <[ReportItem]> reports: [];
+    in-out property <string> selected_worker: "";
+    in-out property <string> selected_worker_barcode: "";
+    in-out property <string> selected_date;
+    in-out property <string> error_message: "";
 
-    in-out property<bool> show_workers: true;
-    in-out property<bool> show_reports: false;
+    in-out property <bool> show_time: true;
+    in-out property <bool> show_reports: false;
+    in-out property <bool> show_workers_tab: false;
 
     callback barcode_scanned(string);
+    callback add_worker(string, string);
+    callback edit_worker(string, string, string);
+    callback date_changed();
+
+    date-picker := DatePickerPopup {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        close-policy: PopupClosePolicy.no-auto-close;
+
+        accepted(date) => {
+            selected_date = "" + date.year + "-" + (date.month < 10 ? "0" : "") + date.month + "-" + (date.day < 10 ? "0" : "") + date.day;
+            date_changed();
+            date-picker.close();
+        }
+        canceled => {
+            date-picker.close();
+        }
+    }
 
     FocusScope {
         key-pressed(event) => {
@@ -34,51 +104,198 @@ export component MainWindow inherits Window {
         VerticalBox {
             HorizontalBox {
                 Button {
-                    text: "Workers";
-                    clicked => { show_workers = true; show_reports = false; }
+                    text: "Time";
+                    clicked => {
+                        show_time = true;
+                        show_reports = false;
+                        show_workers_tab = false;
+                    }
                 }
+
                 Button {
                     text: "Reports";
-                    clicked => { show_workers = false; show_reports = true; }
+                    clicked => {
+                        show_time = false;
+                        show_reports = true;
+                        show_workers_tab = false;
+                    }
+                }
+
+                Button {
+                    text: "Workers";
+                    clicked => {
+                        show_time = false;
+                        show_reports = false;
+                        show_workers_tab = true;
+                    }
                 }
             }
 
-            if show_workers: ListView {
-                for worker in workers: Rectangle {
-                    background: worker.color;
-                    VerticalBox {
-                        Text {
-                            text: worker.name;
-                            font-size: 16px;
-                        }
-                        Text {
-                            text: worker.status;
-                            font-size: 14px;
-                        }
-                        Text {
-                            text: worker.time;
-                            font-size: 12px;
-                        }
-                    }
+            if show_time: ListView {
+                for worker in workers: WorkerTile {
+                    name: worker.name;
+                    status: worker.status;
+                    time: worker.time;
+                    background_color: worker.color;
                 }
             }
 
             if show_reports: VerticalBox {
                 HorizontalBox {
-                    Text { text: "Worker ID:"; }
-                    LineEdit { placeholder-text: "Enter worker ID"; }
+                    Button {
+                        text: @tr("Elija la fecha");
+
+                        clicked => {
+                            date-picker.show();
+                        }
+                    }
                 }
+
                 HorizontalBox {
-                    Text { text: "Date:"; }
-                    LineEdit { placeholder-text: "YYYY-MM-DD"; }
-                    Button { text: "Get Daily"; }
+                    Text {
+                        text: "Worker";
+                        horizontal-alignment: center;
+                        width: 300px;
+                        font-weight: 700;
+                        font-size: 18px;
+                    }
+
+                    Text {
+                        text: "Daily";
+                        horizontal-alignment: center;
+                        width: 200px;
+                        font-weight: 700;
+                        font-size: 18px;
+                    }
+
+                    Text {
+                        text: "Weekly";
+                        horizontal-alignment: center;
+                        width: 200px;
+                        font-weight: 700;
+                        font-size: 18px;
+                    }
+
+                    Text {
+                        text: "Monthly";
+                        horizontal-alignment: center;
+                        width: 200px;
+                        font-weight: 700;
+                        font-size: 18px;
+                    }
                 }
+
+                ListView {
+                    for report in reports: HorizontalBox {
+                        Text {
+                            text: report.name;
+                            horizontal-alignment: center;
+                            width: 300px;
+                            font-size: 16px;
+                        }
+
+                        Text {
+                            text: report.daily_hours;
+                            horizontal-alignment: center;
+                            width: 200px;
+                            font-size: 16px;
+                        }
+
+                        Text {
+                            text: report.weekly_hours;
+                            horizontal-alignment: center;
+                            width: 200px;
+                            font-size: 16px;
+                        }
+
+                        Text {
+                            text: report.monthly_hours;
+                            horizontal-alignment: center;
+                            width: 200px;
+                            font-size: 16px;
+                        }
+                    }
+                }
+            }
+
+            if show_workers_tab: VerticalBox {
                 HorizontalBox {
-                    Text { text: "Month:"; }
-                    LineEdit { placeholder-text: "YYYY-MM"; }
-                    Button { text: "Get Monthly"; }
+                    Text {
+                        text: "Add Worker:";
+                        font-size: 18px;
+                    }
+
+                    add-name := LineEdit {
+                        placeholder-text: "Name";
+                        font-size: 18px;
+                    }
+
+                    add-barcode := LineEdit {
+                        placeholder-text: "Barcode";
+                        font-size: 18px;
+                    }
+
+                    Button {
+                        text: "Add";
+                        clicked => {
+                            add_worker(add-name.text, add-barcode.text);
+                            add-name.text = "";
+                            add-barcode.text = "";
+                        }
+                    }
                 }
-                Text { text: "Total Hours: 0.0"; } // Placeholder
+
+                ListView {
+                    for worker in workers: TouchArea {
+                        VerticalBox {
+                            Text {
+                                text: worker.name + " (" + worker.barcode + ")";
+                                font-size: 18px;
+                            }
+                        }
+
+                        clicked => {
+                            selected_worker = worker.name;
+                            selected_worker_barcode = worker.barcode;
+                        }
+                    }
+                }
+
+                if selected_worker != "": VerticalBox {
+                    HorizontalBox {
+                        Text {
+                            text: "Edit Worker:";
+                            font-size: 18px;
+                        }
+
+                        edit-name := LineEdit {
+                            text: selected_worker;
+                            font-size: 18px;
+                        }
+
+                        edit-barcode := LineEdit {
+                            text: selected_worker_barcode;
+                            font-size: 18px;
+                        }
+                    }
+
+                    HorizontalBox {
+                        Button {
+                            text: "Save";
+                            clicked => {
+                                edit_worker(selected_worker, edit-name.text, edit-barcode.text);
+                                selected_worker = "";
+                                selected_worker_barcode = "";
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: error_message;
+                color: #ff0000;
+                font-size: 18px;
             }
         }
     }

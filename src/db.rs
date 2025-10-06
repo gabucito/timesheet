@@ -4,6 +4,7 @@ use rusqlite::{Connection, Result};
 pub struct Worker {
     pub id: i64,
     pub name: String,
+    pub barcode: String,
     pub active: bool,
 }
 
@@ -19,7 +20,8 @@ pub fn init_db() -> Result<Connection> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS workers (
             id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
+            name TEXT NOT NULL UNIQUE,
+            barcode TEXT NOT NULL UNIQUE,
             active BOOLEAN DEFAULT 1
         )",
         [],
@@ -38,30 +40,32 @@ pub fn init_db() -> Result<Connection> {
 }
 
 // Worker management
-pub fn add_worker(conn: &Connection, name: &str) -> Result<i64> {
+pub fn add_worker(conn: &Connection, name: &str, barcode: &str) -> Result<i64> {
     conn.execute(
-        "INSERT INTO workers (name) VALUES (?)",
-        rusqlite::params![name],
+        "INSERT INTO workers (name, barcode) VALUES (?, ?)",
+        rusqlite::params![name, barcode],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
 pub fn get_workers(conn: &Connection) -> Result<Vec<Worker>> {
-    let mut stmt = conn.prepare("SELECT id, name, active FROM workers WHERE active = 1")?;
+    let mut stmt =
+        conn.prepare("SELECT id, name, barcode, active FROM workers WHERE active = 1")?;
     let worker_iter = stmt.query_map([], |row| {
         Ok(Worker {
             id: row.get(0)?,
             name: row.get(1)?,
-            active: row.get(2)?,
+            barcode: row.get(2)?,
+            active: row.get(3)?,
         })
     })?;
     worker_iter.collect()
 }
 
-pub fn update_worker(conn: &Connection, id: i64, name: &str) -> Result<()> {
+pub fn update_worker(conn: &Connection, id: i64, name: &str, barcode: &str) -> Result<()> {
     conn.execute(
-        "UPDATE workers SET name = ? WHERE id = ?",
-        rusqlite::params![name, id],
+        "UPDATE workers SET name = ?, barcode = ? WHERE id = ?",
+        rusqlite::params![name, barcode, id],
     )?;
     Ok(())
 }
@@ -72,6 +76,23 @@ pub fn soft_delete_worker(conn: &Connection, id: i64) -> Result<()> {
         rusqlite::params![id],
     )?;
     Ok(())
+}
+
+pub fn get_worker_by_barcode(conn: &Connection, barcode: &str) -> Result<Option<Worker>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, barcode, active FROM workers WHERE barcode = ? AND active = 1",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![barcode])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(Worker {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            barcode: row.get(2)?,
+            active: row.get(3)?,
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 // Timesheet functions
@@ -119,6 +140,31 @@ pub fn get_daily_hours(conn: &Connection, worker_id: i64, date: &str) -> Result<
     )?;
     let mut rows = stmt.query(rusqlite::params![worker_id, date])?;
     let mut total_hours = 0.0;
+    let now = Utc::now();
+    while let Some(row) = rows.next()? {
+        let clock_in: String = row.get(0)?;
+        let clock_out: Option<String> = row.get(1)?;
+        let in_time = DateTime::parse_from_rfc3339(&clock_in)
+            .expect("Invalid time")
+            .with_timezone(&Utc);
+        if let Some(out) = clock_out {
+            let out_time = DateTime::parse_from_rfc3339(&out)
+                .expect("Invalid time")
+                .with_timezone(&Utc);
+            total_hours += (out_time - in_time).num_seconds() as f64 / 3600.0;
+        } else {
+            // Ongoing session
+            total_hours += (now - in_time).num_seconds() as f64 / 3600.0;
+        }
+    }
+    Ok(total_hours)
+}
+
+pub fn get_total_hours(conn: &Connection, worker_id: i64) -> Result<f64> {
+    let mut stmt =
+        conn.prepare("SELECT clock_in, clock_out FROM timesheets WHERE worker_id = ?")?;
+    let mut rows = stmt.query(rusqlite::params![worker_id])?;
+    let mut total_hours = 0.0;
     while let Some(row) = rows.next()? {
         let clock_in: String = row.get(0)?;
         let clock_out: Option<String> = row.get(1)?;
@@ -146,17 +192,21 @@ pub fn get_weekly_hours(
     )?;
     let mut rows = stmt.query(rusqlite::params![worker_id, start_date, end_date])?;
     let mut total_hours = 0.0;
+    let now = Utc::now();
     while let Some(row) = rows.next()? {
         let clock_in: String = row.get(0)?;
         let clock_out: Option<String> = row.get(1)?;
+        let in_time = DateTime::parse_from_rfc3339(&clock_in)
+            .expect("Invalid time")
+            .with_timezone(&Utc);
         if let Some(out) = clock_out {
-            let in_time = DateTime::parse_from_rfc3339(&clock_in)
-                .expect("Invalid time")
-                .with_timezone(&Utc);
             let out_time = DateTime::parse_from_rfc3339(&out)
                 .expect("Invalid time")
                 .with_timezone(&Utc);
             total_hours += (out_time - in_time).num_seconds() as f64 / 3600.0;
+        } else {
+            // Ongoing session
+            total_hours += (now - in_time).num_seconds() as f64 / 3600.0;
         }
     }
     Ok(total_hours)
@@ -168,17 +218,21 @@ pub fn get_monthly_hours(conn: &Connection, worker_id: i64, month: &str) -> Resu
     )?;
     let mut rows = stmt.query(rusqlite::params![worker_id, month])?;
     let mut total_hours = 0.0;
+    let now = Utc::now();
     while let Some(row) = rows.next()? {
         let clock_in: String = row.get(0)?;
         let clock_out: Option<String> = row.get(1)?;
+        let in_time = DateTime::parse_from_rfc3339(&clock_in)
+            .expect("Invalid time")
+            .with_timezone(&Utc);
         if let Some(out) = clock_out {
-            let in_time = DateTime::parse_from_rfc3339(&clock_in)
-                .expect("Invalid time")
-                .with_timezone(&Utc);
             let out_time = DateTime::parse_from_rfc3339(&out)
                 .expect("Invalid time")
                 .with_timezone(&Utc);
             total_hours += (out_time - in_time).num_seconds() as f64 / 3600.0;
+        } else {
+            // Ongoing session
+            total_hours += (now - in_time).num_seconds() as f64 / 3600.0;
         }
     }
     Ok(total_hours)
