@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::worker_display::refresh_workers;
-use crate::ui;
 use chrono_tz::America::Santiago;
 
 pub fn initialize_ui_and_data(

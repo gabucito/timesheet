@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Result};
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct Worker {
     pub id: i64,
@@ -9,6 +10,7 @@ pub struct Worker {
     pub active: bool,
 }
 
+#[allow(dead_code)]
 pub struct TimesheetEntry {
     pub id: i64,
     pub worker_id: i64,
@@ -71,6 +73,7 @@ pub fn update_worker(conn: &Connection, id: i64, name: &str, barcode: &str) -> R
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn soft_delete_worker(conn: &Connection, id: i64) -> Result<()> {
     conn.execute(
         "UPDATE workers SET active = 0 WHERE id = ?",
@@ -180,6 +183,7 @@ pub fn get_daily_hours(conn: &Connection, worker_id: i64, date: &str) -> Result<
     Ok(total_hours)
 }
 
+#[allow(dead_code)]
 pub fn get_total_hours(conn: &Connection, worker_id: i64) -> Result<f64> {
     let mut stmt =
         conn.prepare("SELECT clock_in, clock_out FROM timesheets WHERE worker_id = ?")?;

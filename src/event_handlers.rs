@@ -1,11 +1,7 @@
-use chrono_tz::America::Santiago;
-use slint::SharedString;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Mutex;
 
 use crate::db;
-use crate::ui;
 use slint::ComponentHandle;
 
 static LAST_SCAN_TIME: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>> = std::sync::Mutex::new(None);
@@ -24,7 +20,7 @@ pub fn setup_event_handlers(
     let conn_clone3 = conn.clone();
     let conn_clone4 = conn.clone();
     let conn_clone_date = conn.clone();
-    let conn_clone_worker_timer = conn.clone();
+    let _conn_clone_worker_timer = conn.clone();
     let conn_clone_print = conn.clone();
 
     ui.on_barcode_scanned(move |barcode_str| {
@@ -36,29 +32,27 @@ pub fn setup_event_handlers(
             let mut last_scan_barcode = LAST_SCAN_BARCODE.lock().unwrap();
             if let (Some(last_time), Some(last_barcode)) =
                 (*last_scan_time, last_scan_barcode.as_ref())
-            {
-                if now.signed_duration_since(last_time) < chrono::Duration::seconds(5)
+                && now.signed_duration_since(last_time) < chrono::Duration::seconds(5)
                     && last_barcode == barcode_str.as_str()
                 {
                     println!("Scan ignored - too soon after last scan and same barcode");
                     return;
                 }
-            }
             *last_scan_time = Some(now);
             *last_scan_barcode = Some(barcode_str.to_string());
         }
 
         let conn = conn_clone2.borrow();
         println!("Looking up worker with barcode: '{}'", barcode_str);
-        let worker_result = db::get_worker_by_barcode(&*conn, &barcode_str);
+        let worker_result = db::get_worker_by_barcode(&conn, &barcode_str);
         match worker_result {
             Ok(Some(worker)) => {
                 println!("Worker found: {} (ID: {})", worker.name, worker.id);
-                let status_result = db::get_current_status(&*conn, worker.id);
+                let status_result = db::get_current_status(&conn, worker.id);
                 match status_result {
                     Ok(Some(_)) => {
                         // Worker is currently clocked in, perform clock out
-                        if let Err(e) = db::clock_out(&*conn, worker.id) {
+                        if let Err(e) = db::clock_out(&conn, worker.id) {
                             if let Some(ui) = ui_handle_barcode.upgrade() {
                                 ui.set_error_dialog_message(
                                     format!("Error al marcar salida: {}", e).into(),
@@ -79,7 +73,7 @@ pub fn setup_event_handlers(
                     }
                     Ok(None) => {
                         // Worker is not clocked in, perform clock in
-                        if let Err(e) = db::clock_in(&*conn, worker.id) {
+                        if let Err(e) = db::clock_in(&conn, worker.id) {
                             if let Some(ui) = ui_handle_barcode.upgrade() {
                                 ui.set_error_dialog_message(
                                     format!("Error al marcar entrada: {}", e).into(),
@@ -140,7 +134,7 @@ pub fn setup_event_handlers(
         let barcode = barcode.trim();
         if !name.is_empty() && !barcode.is_empty() {
             let conn = conn_clone3.borrow();
-            match db::add_worker(&*conn, name, barcode) {
+            match db::add_worker(&conn, name, barcode) {
                 Ok(_) => {
                     if let Some(ui) = ui_handle_add.upgrade() {
                         ui.set_show_error_dialog(false);
@@ -157,12 +151,10 @@ pub fn setup_event_handlers(
                     }
                 }
             }
-        } else {
-            if let Some(ui) = ui_handle_add.upgrade() {
-                ui.set_error_dialog_message("El nombre y código de barras son obligatorios".into());
-                ui.set_show_error_dialog(true);
-                ui.set_trigger_error_dialog_show(true);
-            }
+        } else if let Some(ui) = ui_handle_add.upgrade() {
+            ui.set_error_dialog_message("El nombre y código de barras son obligatorios".into());
+            ui.set_show_error_dialog(true);
+            ui.set_trigger_error_dialog_show(true);
         }
     });
 
@@ -172,10 +164,10 @@ pub fn setup_event_handlers(
         let new_barcode = new_barcode.trim();
         if !old_name.is_empty() && !new_name.is_empty() && !new_barcode.is_empty() {
             let conn = conn_clone4.borrow();
-            match db::get_workers(&*conn) {
+            match db::get_workers(&conn) {
                 Ok(workers) => {
                     if let Some(worker) = workers.into_iter().find(|w| w.name == old_name) {
-                        match db::update_worker(&*conn, worker.id, new_name, new_barcode) {
+                        match db::update_worker(&conn, worker.id, new_name, new_barcode) {
                             Ok(_) => {
                                 if let Some(ui) = ui_handle_edit.upgrade() {
                                     ui.set_show_error_dialog(false);
@@ -192,12 +184,10 @@ pub fn setup_event_handlers(
                                 }
                             }
                         }
-                    } else {
-                        if let Some(ui) = ui_handle_edit.upgrade() {
-                            ui.set_error_dialog_message("Trabajador no encontrado".into());
-                            ui.set_show_error_dialog(true);
-                            ui.set_trigger_error_dialog_show(true);
-                        }
+                    } else if let Some(ui) = ui_handle_edit.upgrade() {
+                        ui.set_error_dialog_message("Trabajador no encontrado".into());
+                        ui.set_show_error_dialog(true);
+                        ui.set_trigger_error_dialog_show(true);
                     }
                 }
                 Err(e) => {
@@ -288,7 +278,7 @@ pub fn setup_event_handlers(
             let week_start_str = week_start.format("%Y-%m-%d").to_string();
             let week_end_str = week_end.format("%Y-%m-%d").to_string();
 
-            let workers = db::get_workers(&*conn_ref).unwrap_or(vec![]);
+            let workers = db::get_workers(&conn_ref).unwrap_or_default();
 
             let printer_devices = [
                 "/dev/lp0",
@@ -337,12 +327,12 @@ pub fn setup_event_handlers(
                 let _ = file.write_all(b"--------------------------------\n");
 
                 for worker in &workers {
-                    let daily = db::get_daily_hours(&*conn_ref, worker.id, &today).unwrap_or(0.0);
+                    let daily = db::get_daily_hours(&conn_ref, worker.id, &today).unwrap_or(0.0);
                     let weekly =
-                        db::get_weekly_hours(&*conn_ref, worker.id, &week_start_str, &week_end_str)
+                        db::get_weekly_hours(&conn_ref, worker.id, &week_start_str, &week_end_str)
                             .unwrap_or(0.0);
                     let monthly =
-                        db::get_monthly_hours(&*conn_ref, worker.id, &month).unwrap_or(0.0);
+                        db::get_monthly_hours(&conn_ref, worker.id, &month).unwrap_or(0.0);
                     let line = format!(
                         "{}\t{:.2}\t{:.2}\t{:.2}\n",
                         worker.name, daily, weekly, monthly

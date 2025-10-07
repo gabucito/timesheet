@@ -6,6 +6,7 @@ pub fn format_hours(decimal_hours: f64) -> String {
     format!("{:02}:{:02}", hours, minutes)
 }
 
+#[allow(dead_code)]
 pub fn get_last_clock_out(
     conn: &rusqlite::Connection,
     worker_id: i64,

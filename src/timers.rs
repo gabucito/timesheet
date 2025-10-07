@@ -2,7 +2,6 @@ use chrono_tz::America::Santiago;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ui;
 
 pub fn setup_timers(conn: Rc<RefCell<rusqlite::Connection>>, ui_handle: slint::Weak<crate::ui::MainWindow>) {
     // Set up timer to refresh ongoing hours every 10 seconds

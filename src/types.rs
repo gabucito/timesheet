@@ -1,9 +1,3 @@
-use chrono::{Datelike, Weekday};
-use chrono_tz::America::Santiago;
-use slint::SharedString;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Mutex;
 
 #[derive(Clone)]
 pub struct TimesheetDisplay {

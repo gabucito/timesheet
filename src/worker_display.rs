@@ -1,4 +1,4 @@
-use chrono::{Datelike, Weekday};
+use chrono::Weekday;
 use chrono_tz::America::Santiago;
 use slint::SharedString;
 use std::cell::RefCell;
@@ -11,14 +11,14 @@ use crate::ui::{WorkerWithTimes, WorkerInfo, ReportItem};
 pub fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &slint::Weak<crate::ui::MainWindow>) {
     if let Some(ui) = ui_handle.upgrade() {
         let conn_ref = conn.borrow();
-        match crate::db::get_workers(&*conn_ref) {
+        match crate::db::get_workers(&conn_ref) {
             Ok(workers) => {
                 let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
                 let workers_data: Vec<DataWorker> = workers
                     .iter()
                     .map(|worker| {
-                        match crate::db::get_daily_timesheet_entries(&*conn_ref, worker.id, &today) {
+                        match crate::db::get_daily_timesheet_entries(&conn_ref, worker.id, &today) {
                             Ok(entries) if !entries.is_empty() => {
                                 let times = entries
                                     .iter()
@@ -133,7 +133,7 @@ pub fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &sli
                 // Update reports
                 let mut report_items = Vec::new();
                 let now = chrono::Utc::now();
-                let today = now.format("%Y-%m-%d").to_string();
+                let _today = now.format("%Y-%m-%d").to_string();
                 let selected_date_str = ui.get_selected_date().to_string();
                 let selected_naive =
                     chrono::NaiveDate::parse_from_str(&selected_date_str, "%Y-%m-%d")
@@ -148,12 +148,12 @@ pub fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &sli
                 let week_end_str = week_end.format("%Y-%m-%d").to_string();
 
                 for worker in &workers {
-                    let daily = crate::db::get_daily_hours(&*conn_ref, worker.id, &today).unwrap_or(0.0);
+                    let daily = crate::db::get_daily_hours(&conn_ref, worker.id, &today).unwrap_or(0.0);
                     let weekly =
-                        crate::db::get_weekly_hours(&*conn_ref, worker.id, &week_start_str, &week_end_str)
+                        crate::db::get_weekly_hours(&conn_ref, worker.id, &week_start_str, &week_end_str)
                             .unwrap_or(0.0);
                     let monthly =
-                        crate::db::get_monthly_hours(&*conn_ref, worker.id, &month).unwrap_or(0.0);
+                        crate::db::get_monthly_hours(&conn_ref, worker.id, &month).unwrap_or(0.0);
                     report_items.push(ReportItem {
                         name: SharedString::from(worker.name.clone()),
                         daily_hours: SharedString::from(format_hours(daily)),
