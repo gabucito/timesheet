@@ -141,6 +141,15 @@ export component MainWindow inherits MaterialWindow {
         }
     }
 
+    // Current time update timer
+    current_time_update_timer := Timer {
+        interval: 1s;
+        running: true;
+        triggered => {
+            update_current_time();
+        }
+    }
+
     property <int> current_tab: root.show_time ? 0 : root.show_reports ? 1 : root.show_workers_tab ? 2 : 3;
     property <[NavigationItem]> nav_items: [
         { icon: @image-url("../material-1.0/ui/icons/schedule.svg"), text: "Time" },
@@ -158,6 +167,7 @@ export component MainWindow inherits MaterialWindow {
     callback confirm_check_action(bool); // true for confirm, false for cancel
     callback show_notification_dialog();
     callback close_error_dialog();
+    callback update_current_time;
 
     date-picker := DatePickerPopup {
         x: (root.width - self.width) / 2;

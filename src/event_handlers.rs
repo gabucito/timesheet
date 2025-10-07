@@ -1,3 +1,5 @@
+use chrono::Timelike;
+use chrono_tz::America::Santiago;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -216,6 +218,14 @@ pub fn setup_event_handlers(
         // Hide dialog
         if let Some(ui) = ui_handle_error.upgrade() {
             ui.set_show_error_dialog(false);
+        }
+    });
+
+    let ui_handle_time = ui.as_weak();
+    ui.on_update_current_time(move || {
+        if let Some(ui) = ui_handle_time.upgrade() {
+            let now = chrono::Utc::now().with_timezone(&Santiago);
+            ui.set_current_time_display(format!("{}:{}:{}", now.hour(), now.minute(), now.second()).into());
         }
     });
 
