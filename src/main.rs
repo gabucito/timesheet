@@ -1,3 +1,4 @@
+mod barcode;
 mod db;
 mod event_handlers;
 mod timers;
