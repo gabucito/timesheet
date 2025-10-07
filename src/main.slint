@@ -95,7 +95,7 @@ export component MainWindow inherits MaterialWindow {
 
     // Auto-close timer for confirmation dialog
     auto-close-timer := Timer {
-        interval: 3s;
+        interval: 2s;
         running: false;
         triggered => {
             show_confirm_dialog = false;
