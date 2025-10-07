@@ -25,7 +25,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
 
     ui.on_barcode_scanned(move |barcode_str| {
         println!("Barcode scanned callback triggered with: '{}'", barcode_str);
-        let trimmed_barcode = barcode_str.trim();
+        let trimmed_barcode = crate::barcode::normalize(&barcode_str);
         // Check if scan should be ignored: too fast AND same barcode as last
         let now = chrono::Utc::now();
         {
@@ -34,7 +34,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
             if let (Some(last_time), Some(last_barcode)) =
                 (*last_scan_time, last_scan_barcode.as_ref())
                 && now.signed_duration_since(last_time) < chrono::Duration::seconds(2)
-                && last_barcode == trimmed_barcode
+                && *last_barcode == trimmed_barcode
             {
                 println!("Scan ignored - too soon after last scan and same barcode");
                 return;
@@ -45,7 +45,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
 
         let conn = conn_clone2.borrow();
         println!("Looking up worker with barcode: '{}'", trimmed_barcode);
-        let worker_result = db::get_worker_by_barcode(&conn, trimmed_barcode);
+        let worker_result = db::get_worker_by_barcode(&conn, &trimmed_barcode);
         match worker_result {
             Ok(Some(worker)) => {
                 println!("Worker found: {} (ID: {})", worker.name, worker.id);
@@ -134,10 +134,10 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
 
     ui.on_add_worker(move |name, barcode| {
         let name = name.trim();
-        let barcode = barcode.trim();
+        let barcode = crate::barcode::normalize(&barcode);
         if !name.is_empty() && !barcode.is_empty() {
             let conn = conn_clone3.borrow();
-            match db::add_worker(&conn, name, barcode) {
+            match db::add_worker(&conn, name, &barcode) {
                 Ok(_) => {
                     if let Some(ui) = ui_handle_add.upgrade() {
                         ui.set_show_error_dialog(false);
@@ -164,13 +164,13 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
     ui.on_edit_worker(move |old_name, new_name, new_barcode| {
         let old_name = old_name.trim();
         let new_name = new_name.trim();
-        let new_barcode = new_barcode.trim();
+        let new_barcode = crate::barcode::normalize(&new_barcode);
         if !old_name.is_empty() && !new_name.is_empty() && !new_barcode.is_empty() {
             let conn = conn_clone4.borrow();
             match db::get_workers(&conn) {
                 Ok(workers) => {
                     if let Some(worker) = workers.into_iter().find(|w| w.name == old_name) {
-                        match db::update_worker(&conn, worker.id, new_name, new_barcode) {
+                        match db::update_worker(&conn, worker.id, new_name, &new_barcode) {
                             Ok(_) => {
                                 if let Some(ui) = ui_handle_edit.upgrade() {
                                     ui.set_show_error_dialog(false);
