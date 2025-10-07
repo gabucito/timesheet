@@ -15,7 +15,27 @@ pub fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &sli
             Ok(workers) => {
                 let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
-                let workers_data: Vec<DataWorker> = workers
+                // Sort workers: in progress first (by last check-in desc), then not in progress (by last check-out desc)
+                let mut worker_sort_list: Vec<(crate::db::Worker, bool, Option<chrono::DateTime<chrono::Utc>>)> = workers
+                    .into_iter()
+                    .map(|w| {
+                        let entries = crate::db::get_daily_timesheet_entries(&conn_ref, w.id, &today).unwrap_or(vec![]);
+                        let is_in_progress = entries.iter().any(|e| e.clock_out.is_none());
+                        let sort_time = if is_in_progress {
+                            entries.iter().find(|e| e.clock_out.is_none()).map(|e| e.clock_in)
+                        } else {
+                            entries.iter().filter_map(|e| e.clock_out).max()
+                        };
+                        (w, is_in_progress, sort_time)
+                    })
+                    .collect();
+                worker_sort_list.sort_by_key(|&(_, in_progress, time)| (
+                    std::cmp::Reverse(in_progress),
+                    std::cmp::Reverse(time.unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())),
+                ));
+                let sorted_workers: Vec<crate::db::Worker> = worker_sort_list.into_iter().map(|(w, _, _)| w).collect();
+
+                let workers_data: Vec<DataWorker> = sorted_workers
                     .iter()
                     .map(|worker| {
                         match crate::db::get_daily_timesheet_entries(&conn_ref, worker.id, &today) {
@@ -112,14 +132,14 @@ pub fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &sli
                 ui.set_workers(Rc::new(slint::VecModel::from(worker_items)).into());
 
                 // keep worker_names updated
-                let names: Vec<SharedString> = workers
+                let names: Vec<SharedString> = sorted_workers
                     .iter()
                     .map(|w| SharedString::from(w.name.clone()))
                     .collect();
                 ui.set_worker_names(Rc::new(slint::VecModel::from(names)).into());
 
                 // 🔧 NEW: also refresh management_workers for the Workers tab
-                let management_worker_items: Vec<WorkerInfo> = workers
+                let management_worker_items: Vec<WorkerInfo> = sorted_workers
                     .iter()
                     .map(|w| WorkerInfo {
                         name: SharedString::from(w.name.clone()),
@@ -147,7 +167,7 @@ pub fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &sli
                 let week_start_str = week_start.format("%Y-%m-%d").to_string();
                 let week_end_str = week_end.format("%Y-%m-%d").to_string();
 
-                for worker in &workers {
+                for worker in &sorted_workers {
                     let daily = crate::db::get_daily_hours(&conn_ref, worker.id, &today).unwrap_or(0.0);
                     let weekly =
                         crate::db::get_weekly_hours(&conn_ref, worker.id, &week_start_str, &week_end_str)
