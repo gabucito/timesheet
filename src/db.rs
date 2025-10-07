@@ -11,6 +11,7 @@ pub struct Worker {
 }
 
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct TimesheetEntry {
     pub id: i64,
     pub worker_id: i64,

@@ -6,13 +6,11 @@ use std::rc::Rc;
 use crate::db;
 use slint::ComponentHandle;
 
-static LAST_SCAN_TIME: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>> = std::sync::Mutex::new(None);
+static LAST_SCAN_TIME: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>> =
+    std::sync::Mutex::new(None);
 static LAST_SCAN_BARCODE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-pub fn setup_event_handlers(
-    conn: Rc<RefCell<rusqlite::Connection>>,
-    ui: &crate::ui::MainWindow,
-) {
+pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate::ui::MainWindow) {
     let ui_handle = ui.as_weak();
     let ui_handle_barcode = ui_handle.clone();
     let ui_handle_add = ui_handle.clone();
@@ -35,11 +33,11 @@ pub fn setup_event_handlers(
             if let (Some(last_time), Some(last_barcode)) =
                 (*last_scan_time, last_scan_barcode.as_ref())
                 && now.signed_duration_since(last_time) < chrono::Duration::seconds(5)
-                    && last_barcode == barcode_str.as_str()
-                {
-                    println!("Scan ignored - too soon after last scan and same barcode");
-                    return;
-                }
+                && last_barcode == barcode_str.as_str()
+            {
+                println!("Scan ignored - too soon after last scan and same barcode");
+                return;
+            }
             *last_scan_time = Some(now);
             *last_scan_barcode = Some(barcode_str.to_string());
         }
@@ -174,7 +172,10 @@ pub fn setup_event_handlers(
                                 if let Some(ui) = ui_handle_edit.upgrade() {
                                     ui.set_show_error_dialog(false);
                                 }
-                                crate::worker_display::refresh_workers(&conn_clone4, &ui_handle_edit);
+                                crate::worker_display::refresh_workers(
+                                    &conn_clone4,
+                                    &ui_handle_edit,
+                                );
                             }
                             Err(e) => {
                                 if let Some(ui) = ui_handle_edit.upgrade() {
@@ -225,7 +226,9 @@ pub fn setup_event_handlers(
     ui.on_update_current_time(move || {
         if let Some(ui) = ui_handle_time.upgrade() {
             let now = chrono::Utc::now().with_timezone(&Santiago);
-            ui.set_current_time_display(format!("{}:{}:{}", now.hour(), now.minute(), now.second()).into());
+            ui.set_current_time_display(
+                format!("{}:{}:{}", now.hour(), now.minute(), now.second()).into(),
+            );
         }
     });
 

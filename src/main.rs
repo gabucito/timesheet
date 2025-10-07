@@ -1,15 +1,15 @@
 mod db;
-mod types;
-mod utils;
-mod worker_display;
-mod ui_setup;
 mod event_handlers;
 mod timers;
+mod types;
 mod ui;
+mod ui_setup;
+mod utils;
+mod worker_display;
 
+use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::rc::Rc;
-use slint::ComponentHandle;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let conn = db::init_db()?;

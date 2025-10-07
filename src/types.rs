@@ -1,4 +1,3 @@
-
 #[derive(Clone)]
 pub struct TimesheetDisplay {
     pub checked_in_time: String,
