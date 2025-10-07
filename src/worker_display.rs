@@ -35,7 +35,17 @@ pub fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &sli
                 ));
                 let sorted_workers: Vec<crate::db::Worker> = worker_sort_list.into_iter().map(|(w, _, _)| w).collect();
 
-                let workers_data: Vec<DataWorker> = sorted_workers
+                // Separate into two groups
+                let (in_progress_workers, not_in_progress_workers): (Vec<crate::db::Worker>, Vec<crate::db::Worker>) = sorted_workers.into_iter().partition(|w| {
+                    let entries = crate::db::get_daily_timesheet_entries(&conn_ref, w.id, &today).unwrap_or(vec![]);
+                    entries.iter().any(|e| e.clock_out.is_none())
+                });
+
+                // Restore sorted_workers for other uses
+                let mut sorted_workers = in_progress_workers.clone();
+                sorted_workers.extend(not_in_progress_workers.clone());
+
+                let in_progress_workers_data: Vec<DataWorker> = in_progress_workers
                     .iter()
                     .map(|worker| {
                         match crate::db::get_daily_timesheet_entries(&conn_ref, worker.id, &today) {
@@ -66,23 +76,11 @@ pub fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &sli
                                                 ) // Orange for ongoing
                                             };
 
-                                        let duration = if let Some(out_time) = entry.clock_out {
-                                            let hours = (out_time - entry.clock_in).num_seconds()
-                                                as f64
-                                                / 3600.0;
-                                            format_hours(hours)
-                                        } else {
-                                            let hours = (chrono::Utc::now() - entry.clock_in)
-                                                .num_seconds()
-                                                as f64
-                                                / 3600.0;
-                                            format!("{} (en curso)", format_hours(hours))
-                                        };
+                                       // Duration removed from display
 
                                         TimesheetDisplay {
                                             checked_in_time: clock_in_time,
                                             checked_out_time: clock_out_time,
-                                            current_total_hours: duration,
                                             color,
                                             show_name: index == 0,
                                         }
@@ -94,42 +92,123 @@ pub fn refresh_workers(conn: &Rc<RefCell<rusqlite::Connection>>, ui_handle: &sli
                                 }
                             }
                             Ok(_) | Err(_) => {
-                                // No entries or error: show worker with placeholder data
-                                let times = vec![TimesheetDisplay {
-                                    checked_in_time: "".to_string(),
-                                    checked_out_time: "".to_string(),
-                                    current_total_hours: "0:00".to_string(),
-                                    color: slint::Color::from_rgb_u8(200, 200, 200), // Gray
-                                    show_name: true,
-                                }];
-                                DataWorker {
-                                    worker: worker.clone(),
-                                    times,
+                                    // No entries or error: show worker with placeholder data
+                                    let times = vec![TimesheetDisplay {
+                                        checked_in_time: "".to_string(),
+                                        checked_out_time: "".to_string(),
+                                        color: slint::Color::from_rgb_u8(200, 200, 200), // Gray
+                                        show_name: true,
+                                    }];
+                                    DataWorker {
+                                        worker: worker.clone(),
+                                        times,
+                                    }
                                 }
                             }
-                        }
-                    })
-                    .collect();
-
-                let worker_items: Vec<WorkerWithTimes> = workers_data
-                    .into_iter()
-                    .flat_map(|w| {
-                        w.times.into_iter().map(move |t| WorkerWithTimes {
-                            name: SharedString::from(if t.show_name {
-                                w.worker.name.clone()
-                            } else {
-                                "".to_string()
-                            }),
-                            checked_in_time: SharedString::from(t.checked_in_time),
-                            checked_out_time: SharedString::from(t.checked_out_time),
-                            current_total_hours: SharedString::from(t.current_total_hours),
-                            color: t.color,
-                            barcode: SharedString::from(w.worker.barcode.clone()),
-                            show_name: t.show_name,
                         })
-                    })
-                    .collect();
-                ui.set_workers(Rc::new(slint::VecModel::from(worker_items)).into());
+                        .collect();
+   
+                    let not_in_progress_workers_data: Vec<DataWorker> = not_in_progress_workers
+                        .iter()
+                        .map(|worker| {
+                            match crate::db::get_daily_timesheet_entries(&conn_ref, worker.id, &today) {
+                                Ok(entries) if !entries.is_empty() => {
+                                    let times = entries
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(index, entry)| {
+                                            let clock_in_time = entry
+                                                .clock_in
+                                                .with_timezone(&Santiago)
+                                                .format("%H:%M:%S")
+                                                .to_string();
+   
+                                            let (clock_out_time, color) =
+                                                if let Some(out_time) = entry.clock_out {
+                                                    (
+                                                        out_time
+                                                            .with_timezone(&Santiago)
+                                                            .format("%H:%M:%S")
+                                                            .to_string(),
+                                                        slint::Color::from_argb_u8(0, 0, 0, 0),
+                                                    ) // Transparent for completed
+                                                } else {
+                                                    (
+                                                        "En Progreso".to_string(),
+                                                        slint::Color::from_rgb_u8(255, 165, 0),
+                                                    ) // Orange for ongoing
+                                                };
+   
+                                           // Duration removed from display
+   
+                                            TimesheetDisplay {
+                                                checked_in_time: clock_in_time,
+                                                checked_out_time: clock_out_time,
+                                                color,
+                                                show_name: index == 0,
+                                            }
+                                        })
+                                        .collect();
+                                    DataWorker {
+                                        worker: worker.clone(),
+                                        times,
+                                    }
+                                }
+                                Ok(_) | Err(_) => {
+                                    // No entries or error: show worker with placeholder data
+                                    let times = vec![TimesheetDisplay {
+                                        checked_in_time: "".to_string(),
+                                        checked_out_time: "".to_string(),
+                                        color: slint::Color::from_rgb_u8(200, 200, 200), // Gray
+                                        show_name: true,
+                                    }];
+                                    DataWorker {
+                                        worker: worker.clone(),
+                                        times,
+                                    }
+                                }
+                            }
+                        })
+                        .collect();
+   
+                    let in_progress_worker_items: Vec<WorkerWithTimes> = in_progress_workers_data
+                        .into_iter()
+                        .flat_map(|w| {
+                            w.times.into_iter().map(move |t| WorkerWithTimes {
+                                name: SharedString::from(if t.show_name {
+                                    w.worker.name.clone()
+                                } else {
+                                    "".to_string()
+                                }),
+                                checked_in_time: SharedString::from(t.checked_in_time),
+                                checked_out_time: SharedString::from(t.checked_out_time),
+                                color: t.color,
+                                barcode: SharedString::from(w.worker.barcode.clone()),
+                                show_name: t.show_name,
+                            })
+                        })
+                        .collect();
+   
+                    let not_in_progress_worker_items: Vec<WorkerWithTimes> = not_in_progress_workers_data
+                        .into_iter()
+                        .flat_map(|w| {
+                            w.times.into_iter().map(move |t| WorkerWithTimes {
+                                name: SharedString::from(if t.show_name {
+                                    w.worker.name.clone()
+                                } else {
+                                    "".to_string()
+                                }),
+                                checked_in_time: SharedString::from(t.checked_in_time),
+                                checked_out_time: SharedString::from(t.checked_out_time),
+                                color: t.color,
+                                barcode: SharedString::from(w.worker.barcode.clone()),
+                                show_name: t.show_name,
+                            })
+                        })
+                        .collect();
+   
+                    ui.set_in_progress_workers(Rc::new(slint::VecModel::from(in_progress_worker_items)).into());
+                    ui.set_not_in_progress_workers(Rc::new(slint::VecModel::from(not_in_progress_worker_items)).into());
 
                 // keep worker_names updated
                 let names: Vec<SharedString> = sorted_workers
