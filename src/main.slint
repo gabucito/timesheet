@@ -49,6 +49,7 @@ export component MainWindow inherits MaterialWindow {
     // Confirmation dialog properties
     in-out property <string> confirm_worker_name: "";
     in-out property <string> confirm_action: "";
+    in-out property <bool> confirm_is_check_in: true;
     in-out property <bool> show_confirm_dialog: false;
     in-out property <bool> trigger_dialog_show: false;
 
@@ -189,7 +190,7 @@ export component MainWindow inherits MaterialWindow {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         width: 400px;
-        height: 150px;
+        height: 100px;
         visible: show_confirm_dialog;
 
         Rectangle {
@@ -200,25 +201,21 @@ export component MainWindow inherits MaterialWindow {
 
             Vertical {
                 padding: 20px;
-                spacing: 15px;
+                spacing: 10px;
 
                 MaterialText {
-                    text: confirm_worker_name + " - " + confirm_action;
+                    text: confirm_worker_name;
                     font-size: 18px;
                     font-weight: 500;
                     horizontal-alignment: center;
                 }
 
-                Horizontal {
-                    alignment: center;
-
-                    FilledButton {
-                        text: "Aceptar";
-                        clicked => {
-                            auto-close-timer.running = false;
-                            show_confirm_dialog = false;
-                        }
-                    }
+                MaterialText {
+                    text: confirm_action;
+                    font-size: 18px;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                    color: confirm_is_check_in ? #4CAF50 : #F44336;
                 }
             }
         }
@@ -315,31 +312,31 @@ export component MainWindow inherits MaterialWindow {
             if show_time: Horizontal {
                  // Current time display on the left (1/4 width)
                  Rectangle {
-                     width: root.width / 4;
-                     Vertical {
-                         MaterialText {
-                             text: "Current Time";
-                             horizontal-alignment: center;
-                             font-size: 20px;
-                             font-weight: 700;
-                         }
+                    width: root.width / 4;
+                    Vertical {
+                        MaterialText {
+                            text: "Current Time";
+                            horizontal-alignment: center;
+                            font-size: 20px;
+                            font-weight: 700;
+                        }
 
-                         MaterialText {
-                             text: current_time_display;
-                             horizontal-alignment: center;
-                             font-size: 64px;
-                             font-weight: 700;
-                         }
+                        MaterialText {
+                            text: current_time_display;
+                            horizontal-alignment: center;
+                            font-size: 64px;
+                            font-weight: 700;
+                        }
 
-                         MaterialText {
-                             text: "Santiago, Chile";
-                             horizontal-alignment: center;
-                             font-size: 16px;
-                         }
-                     }
-                 }
+                        MaterialText {
+                            text: "Santiago, Chile";
+                            horizontal-alignment: center;
+                            font-size: 16px;
+                        }
+                    }
+                }
 
-                 // Worker tables on the right (3/4 width)
+                // Worker tables on the right (3/4 width)
                  Horizontal {
                     // In progress workers column
                     Vertical {
@@ -350,6 +347,7 @@ export component MainWindow inherits MaterialWindow {
                             font-weight: 700;
                             font-size: 18px;
                         }
+
                         Horizontal {
                             MaterialText {
                                 text: "Nombre";
@@ -421,6 +419,7 @@ export component MainWindow inherits MaterialWindow {
                             font-weight: 700;
                             font-size: 18px;
                         }
+
                         Horizontal {
                             MaterialText {
                                 text: "Nombre";

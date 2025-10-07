@@ -25,6 +25,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
 
     ui.on_barcode_scanned(move |barcode_str| {
         println!("Barcode scanned callback triggered with: '{}'", barcode_str);
+        let trimmed_barcode = barcode_str.trim();
         // Check if scan should be ignored: too fast AND same barcode as last
         let now = chrono::Utc::now();
         {
@@ -32,19 +33,19 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
             let mut last_scan_barcode = LAST_SCAN_BARCODE.lock().unwrap();
             if let (Some(last_time), Some(last_barcode)) =
                 (*last_scan_time, last_scan_barcode.as_ref())
-                && now.signed_duration_since(last_time) < chrono::Duration::seconds(5)
-                && last_barcode == barcode_str.as_str()
+                && now.signed_duration_since(last_time) < chrono::Duration::seconds(2)
+                && last_barcode == trimmed_barcode
             {
                 println!("Scan ignored - too soon after last scan and same barcode");
                 return;
             }
             *last_scan_time = Some(now);
-            *last_scan_barcode = Some(barcode_str.to_string());
+            *last_scan_barcode = Some(trimmed_barcode.to_string());
         }
 
         let conn = conn_clone2.borrow();
-        println!("Looking up worker with barcode: '{}'", barcode_str);
-        let worker_result = db::get_worker_by_barcode(&conn, &barcode_str);
+        println!("Looking up worker with barcode: '{}'", trimmed_barcode);
+        let worker_result = db::get_worker_by_barcode(&conn, trimmed_barcode);
         match worker_result {
             Ok(Some(worker)) => {
                 println!("Worker found: {} (ID: {})", worker.name, worker.id);
@@ -67,6 +68,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
                             println!("Showing notification dialog for clock out: {}", worker.name);
                             ui.set_confirm_worker_name(worker.name.into());
                             ui.set_confirm_action("Salida registrada".into());
+                            ui.set_confirm_is_check_in(false);
                             ui.set_show_confirm_dialog(true);
                             ui.set_trigger_dialog_show(true);
                         }
@@ -88,6 +90,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
                             println!("Showing notification dialog for clock in: {}", worker.name);
                             ui.set_confirm_worker_name(worker.name.into());
                             ui.set_confirm_action("Entrada registrada".into());
+                            ui.set_confirm_is_check_in(true);
                             ui.set_show_confirm_dialog(true);
                             ui.set_trigger_dialog_show(true);
                         }
@@ -109,7 +112,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
                 crate::worker_display::refresh_workers(&conn_clone2, &ui_handle_barcode);
             }
             Ok(None) => {
-                println!("Worker not found for barcode: '{}'", barcode_str);
+                println!("Worker not found for barcode: '{}'", trimmed_barcode);
                 if let Some(ui) = ui_handle_barcode.upgrade() {
                     ui.set_error_dialog_message("Trabajador no encontrado".into());
                     ui.set_show_error_dialog(true);
