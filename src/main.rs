@@ -449,6 +449,141 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         refresh_workers(&conn_clone_date, &ui_handle_date);
     });
 
+    // Handle test printer connection
+    let ui_handle_test = ui.as_weak();
+    ui.on_test_printer_connection(move || {
+        if let Some(ui) = ui_handle_test.upgrade() {
+            // Comprehensive list of common USB thermal printer device paths in Linux
+            let printer_devices = [
+                // Parallel printer ports
+                "/dev/lp0",
+                "/dev/lp1",
+                "/dev/lp2",
+                "/dev/lp3",
+                // USB printer ports
+                "/dev/usb/lp0",
+                "/dev/usb/lp1",
+                "/dev/usb/lp2",
+                "/dev/usb/lp3",
+                // USB serial ports (common for thermal printers)
+                "/dev/ttyACM0",
+                "/dev/ttyACM1",
+                "/dev/ttyACM2",
+                "/dev/ttyACM3",
+                "/dev/ttyUSB0",
+                "/dev/ttyUSB1",
+                "/dev/ttyUSB2",
+                "/dev/ttyUSB3",
+                // Serial ports (less common but possible)
+                "/dev/ttyS0",
+                "/dev/ttyS1",
+                "/dev/ttyS2",
+                "/dev/ttyS3",
+            ];
+            for device in &printer_devices {
+                if let Ok(mut file) = std::fs::File::create(device) {
+                    use std::io::Write;
+                    let _ = file.write_all(b"\x1b@\nPrinter OK\n\x1dVA\x00");
+                    ui.set_printer_status_message("Printer connected".into());
+                    return;
+                }
+            }
+            ui.set_printer_status_message("Printer not found".into());
+        }
+    });
+
+    // Handle print report
+    let conn_clone_print = conn.clone();
+    let ui_handle_print = ui.as_weak();
+    ui.on_print_report(move || {
+        println!("Print report button clicked");
+        if let Some(ui) = ui_handle_print.upgrade() {
+            let conn_ref = conn_clone_print.borrow();
+            let selected_date_str = ui.get_selected_date().to_string();
+            let selected_naive = chrono::NaiveDate::parse_from_str(&selected_date_str, "%Y-%m-%d")
+                .unwrap_or(chrono::Utc::now().date_naive());
+            let today = selected_naive.format("%Y-%m-%d").to_string();
+            let month = selected_naive.format("%Y-%m").to_string();
+            let week = selected_naive.week(chrono::Weekday::Mon);
+            let week_start = week.first_day();
+            let week_end = week.last_day();
+            let week_start_str = week_start.format("%Y-%m-%d").to_string();
+            let week_end_str = week_end.format("%Y-%m-%d").to_string();
+
+            let workers = db::get_workers(&*conn_ref).unwrap_or(vec![]);
+
+            // Comprehensive list of common USB thermal printer device paths in Linux
+            let printer_devices = [
+                "/dev/lp0",
+                "/dev/lp1",
+                "/dev/lp2",
+                "/dev/lp3",
+                "/dev/usb/lp0",
+                "/dev/usb/lp1",
+                "/dev/usb/lp2",
+                "/dev/usb/lp3",
+                "/dev/ttyACM0",
+                "/dev/ttyACM1",
+                "/dev/ttyACM2",
+                "/dev/ttyACM3",
+                "/dev/ttyUSB0",
+                "/dev/ttyUSB1",
+                "/dev/ttyUSB2",
+                "/dev/ttyUSB3",
+                "/dev/ttyS0",
+                "/dev/ttyS1",
+                "/dev/ttyS2",
+                "/dev/ttyS3",
+            ];
+            let mut file = None;
+            for device in &printer_devices {
+                // Try opening with different options for character devices
+                let f = std::fs::OpenOptions::new().write(true).open(device);
+                if let Ok(f) = f {
+                    println!("Found printer device: {}", device);
+                    file = Some(f);
+                    break;
+                }
+            }
+            if let Some(mut file) = file {
+                use std::io::Write;
+
+                // Small delay to ensure printer is ready after test
+                std::thread::sleep(std::time::Duration::from_millis(500));
+
+                // ESC/POS init
+                if let Err(e) = file.write_all(b"\x1b@") {
+                    println!("Error writing ESC/POS init: {}", e);
+                    return;
+                }
+
+                let _ = file.write_all(b"Timesheet Report\n");
+                let _ = file.write_all(format!("Date: {}\n\n", selected_date_str).as_bytes());
+                let _ = file.write_all(b"Name\tDaily\tWeekly\tMonthly\n");
+                let _ = file.write_all(b"--------------------------------\n");
+
+                for worker in &workers {
+                    let daily = db::get_daily_hours(&*conn_ref, worker.id, &today).unwrap_or(0.0);
+                    let weekly =
+                        db::get_weekly_hours(&*conn_ref, worker.id, &week_start_str, &week_end_str)
+                            .unwrap_or(0.0);
+                    let monthly =
+                        db::get_monthly_hours(&*conn_ref, worker.id, &month).unwrap_or(0.0);
+                    let line = format!(
+                        "{}\t{:.2}\t{:.2}\t{:.2}\n",
+                        worker.name, daily, weekly, monthly
+                    );
+                    let _ = file.write_all(line.as_bytes());
+                }
+
+                // Feed and cut
+                let _ = file.write_all(b"\n\x1dVA\x00");
+                let _ = file.flush();
+                println!("Report sent to printer");
+            }
+        }
+    });
+
     // Set up timer to refresh ongoing hours every 10 seconds
     let conn_clone_worker_timer = conn.clone();
     let ui_handle_worker_timer = ui_handle.clone();

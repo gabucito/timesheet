@@ -23,43 +23,6 @@ struct WorkerInfo {
     barcode: string,
 }
 
-component WorkerTile inherits Rectangle {
-    width: 450px;
-    height: 60px;
-
-    in property <string> name;
-    in property <string> status;
-    in property <string> time;
-    in property <color> background_color;
-
-    background: background_color;
-    Horizontal {
-        MaterialText {
-            text: name;
-            font-size: 20px;
-            color: background_color == #ff0000 ? #ffffff : #000000;
-            horizontal-alignment: center;
-            width: 150px;
-        }
-
-        MaterialText {
-            text: status;
-            font-size: 18px;
-            color: background_color == #ff0000 ? #ffffff : #000000;
-            horizontal-alignment: center;
-            width: 120px;
-        }
-
-        MaterialText {
-            text: time;
-            font-size: 18px;
-            color: background_color == #ff0000 ? #ffffff : #000000;
-            horizontal-alignment: center;
-            width: 120px;
-        }
-    }
-}
-
 export component MainWindow inherits MaterialWindow {
     title: "Timesheet";
     width: 1920px;
@@ -75,10 +38,12 @@ export component MainWindow inherits MaterialWindow {
     in-out property <string> selected_date;
     in-out property <string> current_time_display: "";
     in-out property <string> error_message: "";
+    in-out property <string> printer_status_message: "Printer status unknown";
 
     in-out property <bool> show_time: true;
     in-out property <bool> show_reports: false;
     in-out property <bool> show_workers_tab: false;
+    in-out property <bool> show_settings: false;
 
     // Confirmation dialog properties
     in-out property <string> confirm_worker_name: "";
@@ -176,17 +141,20 @@ export component MainWindow inherits MaterialWindow {
         }
     }
 
-    property <int> current_tab: root.show_time ? 0 : root.show_reports ? 1 : 2;
+    property <int> current_tab: root.show_time ? 0 : root.show_reports ? 1 : root.show_workers_tab ? 2 : 3;
     property <[NavigationItem]> nav_items: [
         { icon: @image-url("../material-1.0/ui/icons/schedule.svg"), text: "Time" },
         { icon: @image-url("../material-1.0/ui/icons/calendar_today.svg"), text: "Reports" },
-        { icon: @image-url("../material-1.0/ui/icons/chevron_forward.svg"), text: "Workers" }
+        { icon: @image-url("../material-1.0/ui/icons/chevron_forward.svg"), text: "Workers" },
+        { icon: @image-url("../material-1.0/ui/icons/menu.svg"), text: "Settings" }
     ];
 
     callback barcode_scanned(string);
     callback add_worker(string, string);
     callback edit_worker(string, string, string);
     callback date_changed();
+    callback print_report();
+    callback test_printer_connection();
     callback confirm_check_action(bool); // true for confirm, false for cancel
     callback show_notification_dialog();
     callback close_error_dialog();
@@ -324,6 +292,7 @@ export component MainWindow inherits MaterialWindow {
                     show_time = index == 0;
                     show_reports = index == 1;
                     show_workers_tab = index == 2;
+                    show_settings = index == 3;
                     // Focus the barcode input area when switching to time tab
                     if show_time {
                         // make sure our FocusScope receives keyboard input
@@ -449,6 +418,14 @@ export component MainWindow inherits MaterialWindow {
                             date_picker.show();
                         }
                     }
+
+                    FilledButton {
+                        text: "Print Report";
+
+                        clicked => {
+                            print_report();
+                        }
+                    }
                 }
 
                 Horizontal {
@@ -515,6 +492,28 @@ export component MainWindow inherits MaterialWindow {
                             font-size: 16px;
                         }
                     }
+                }
+            }
+
+            if show_settings: Vertical {
+                MaterialText {
+                    text: "Printer Settings";
+                    font-size: 24px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+
+                FilledButton {
+                    text: "Test Printer Connection";
+                    clicked => {
+                        test_printer_connection();
+                    }
+                }
+
+                MaterialText {
+                    text: printer_status_message;
+                    font-size: 18px;
+                    horizontal-alignment: center;
                 }
             }
 
