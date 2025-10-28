@@ -1,12 +1,20 @@
 use crate::db::{self, TimesheetEntry};
-use chrono::{Datelike, NaiveDate, Utc, Weekday, Duration};
+use chrono::{Datelike, Duration, NaiveDate, Utc, Weekday};
 use chrono_tz::America::Santiago;
 use rusqlite::Connection;
+use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::collections::BTreeMap;
+
+#[derive(Clone)]
+struct WorkerReportData {
+    worker_name: String,
+    day_groups: Vec<DayGroup>,
+    total_minutes: i64,
+    has_open_sessions: bool,
+}
 
 #[derive(Debug)]
 pub enum ReportError {
@@ -39,6 +47,7 @@ impl From<std::io::Error> for ReportError {
     }
 }
 
+#[derive(Clone)]
 struct ReportRow {
     date: NaiveDate,
     clock_in: String,
@@ -48,6 +57,7 @@ struct ReportRow {
     is_open: bool,
 }
 
+#[derive(Clone)]
 struct DayGroup {
     date: NaiveDate,
     weekday_name: String,
@@ -64,6 +74,8 @@ pub fn generate_monthly_reports(
     fs::create_dir_all(output_root)?;
 
     let workers = db::get_workers(conn)?;
+    let mut all_worker_data = Vec::new();
+
     for worker in workers {
         let worker_rows = build_rows(conn, worker.id, &month_key)?;
         let worker_dir = output_root;
@@ -87,7 +99,19 @@ pub fn generate_monthly_reports(
             &worker_rows.day_groups,
             worker_rows.total_minutes,
         )?;
+
+        // Collect data for merged report
+        all_worker_data.push(WorkerReportData {
+            worker_name: worker.name,
+            day_groups: worker_rows.day_groups,
+            total_minutes: worker_rows.total_minutes,
+            has_open_sessions: worker_rows.has_open_sessions,
+        });
     }
+
+    // Generate merged HTML report
+    let merged_html_path = output_root.join(format!("{}_all_workers.html", month_key));
+    write_merged_html_report(&merged_html_path, &month_key, &all_worker_data)?;
 
     Ok(())
 }
@@ -102,7 +126,7 @@ fn build_rows(
     conn: &Connection,
     worker_id: i64,
     month_key: &str,
-    ) -> Result<WorkerRows, ReportError> {
+) -> Result<WorkerRows, ReportError> {
     let entries = db::get_monthly_timesheet_entries(conn, worker_id, month_key)?;
     let mut grouped: BTreeMap<NaiveDate, Vec<ReportRow>> = BTreeMap::new();
     let mut total_minutes = 0;
@@ -119,11 +143,8 @@ fn build_rows(
         grouped.entry(row.date).or_default().push(row);
     }
 
-    let month_start = NaiveDate::parse_from_str(
-        &format!("{}-01", month_key),
-        "%Y-%m-%d",
-    )
-    .map_err(|_| ReportError::InvalidMonth(month_key.to_string()))?;
+    let month_start = NaiveDate::parse_from_str(&format!("{}-01", month_key), "%Y-%m-%d")
+        .map_err(|_| ReportError::InvalidMonth(month_key.to_string()))?;
 
     let mut day_groups = Vec::new();
     let mut current_day = month_start;
@@ -214,7 +235,11 @@ fn write_html_report(
         html.push_str("<tr><td colspan=\"4\">No recorded sessions for this month.</td></tr>");
     } else {
         for (index, group) in day_groups.iter().enumerate() {
-            let base_class = if index % 2 == 0 { "day-even" } else { "day-odd" };
+            let base_class = if index % 2 == 0 {
+                "day-even"
+            } else {
+                "day-odd"
+            };
             let class = if group.is_weekend {
                 format!("{} weekend", base_class)
             } else {
@@ -312,6 +337,92 @@ fn write_csv_report(
 
     let mut file = File::create(path)?;
     file.write_all(contents.as_bytes())?;
+    Ok(())
+}
+
+fn write_merged_html_report(
+    path: &Path,
+    month: &str,
+    worker_data: &[WorkerReportData],
+) -> Result<(), ReportError> {
+    let mut html = String::new();
+    writeln!(
+        html,
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>All Workers Timesheet {month}</title>\
+<style>@media print {{ .page-break {{ page-break-before: always; }} }} body{{font-family:Arial,sans-serif;padding:20px}}h1{{margin-bottom:0}}h2{{margin-top:40px;margin-bottom:10px;padding-top:20px;border-top:2px solid #333}}table{{border-collapse:collapse;width:100%;margin-top:16px}}th,td{{border:1px solid #555;padding:6px;text-align:center}}th{{background-color:#eee}}table tbody tr.day-even td{{background-color:#f7f7f7}}table tbody tr.day-odd td{{background-color:#ffffff}}table tbody tr.weekend td{{color:#e33d3d}}table tbody tr td:first-child{{font-weight:600}}</style></head><body>",
+        month = month
+    )
+    .expect("write to string");
+    writeln!(
+        html,
+        "<h1>All Workers Timesheet</h1><h2>Month: {}</h2>",
+        month
+    )
+    .expect("write to string");
+
+    for (worker_idx, worker) in worker_data.iter().enumerate() {
+        if worker_idx > 0 {
+            html.push_str("<div class=\"page-break\"></div>");
+        }
+
+        writeln!(html, "<h2>{}</h2>", escape_html(&worker.worker_name)).expect("write to string");
+
+        html.push_str("<table><thead><tr><th>Date</th><th>Clock In</th><th>Clock Out</th><th>Duration (HH:MM)</th></tr></thead><tbody>");
+
+        if worker.day_groups.is_empty() {
+            html.push_str("<tr><td colspan=\"4\">No recorded sessions for this month.</td></tr>");
+        } else {
+            for (index, group) in worker.day_groups.iter().enumerate() {
+                let base_class = if index % 2 == 0 {
+                    "day-even"
+                } else {
+                    "day-odd"
+                };
+                let class = if group.is_weekend {
+                    format!("{} weekend", base_class)
+                } else {
+                    base_class.to_string()
+                };
+                let rowspan = group.rows.len();
+                for (row_idx, row) in group.rows.iter().enumerate() {
+                    html.push_str(&format!("<tr class=\"{}\">", class));
+                    if row_idx == 0 {
+                        writeln!(
+                            html,
+                            "<td rowspan=\"{rowspan}\"><strong>{date}</strong><br/><small>{weekday}</small></td>",
+                            date = group.date.format("%m/%d"),
+                            weekday = group.weekday_name,
+                        )
+                        .expect("write to string");
+                    }
+                    writeln!(
+                        html,
+                        "<td>{}</td><td>{}</td><td>{}</td></tr>",
+                        row.clock_in, row.clock_out, row.duration_label
+                    )
+                    .expect("write to string");
+                }
+            }
+        }
+        html.push_str("</tbody></table>");
+
+        writeln!(
+            html,
+            "<p><strong>Total:</strong> {} ({} minutes)</p>",
+            format_duration(worker.total_minutes),
+            worker.total_minutes
+        )
+        .expect("write to string");
+
+        if worker.has_open_sessions {
+            html.push_str("<p>* Entries marked with an asterisk do not have a recorded clock out; the current time was used to compute the duration.</p>");
+        }
+    }
+
+    html.push_str("</body></html>");
+
+    let mut file = File::create(path)?;
+    file.write_all(html.as_bytes())?;
     Ok(())
 }
 
