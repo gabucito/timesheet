@@ -2,6 +2,7 @@ use chrono::{Datelike, Timelike};
 use chrono_tz::America::Santiago;
 use std::cell::RefCell;
 use std::fmt;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -443,6 +444,10 @@ fn open_directory_in_file_manager(path: &Path) -> std::io::Result<()> {
 }
 
 fn detect_or_mount_usb() -> Result<PathBuf, UsbMountError> {
+    if let Some(existing) = detect_existing_mount() {
+        return Ok(existing);
+    }
+
     let devices = enumerate_usb_devices()?;
 
     if let Some(mounted) = devices
@@ -457,9 +462,44 @@ fn detect_or_mount_usb() -> Result<PathBuf, UsbMountError> {
     mount_device(&device.device_path)
 }
 
+fn detect_existing_mount() -> Option<PathBuf> {
+    let roots = [Path::new("/run/media"), Path::new("/media"), Path::new("/mnt")];
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        if let Some(found) = find_mount_under(root) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_mount_under(root: &Path) -> Option<PathBuf> {
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if let Ok(nested) = fs::read_dir(&path) {
+                for nested_entry in nested.flatten() {
+                    let nested_path = nested_entry.path();
+                    if nested_path.is_dir() {
+                        return Some(nested_path);
+                    }
+                }
+            }
+            // fallback to direct directory if no nested directories found
+            return Some(path);
+        }
+    }
+    None
+}
+
 fn enumerate_usb_devices() -> Result<Vec<UsbDevice>, UsbMountError> {
     let output = Command::new("lsblk")
-        .args(["-J", "-o", "NAME,PATH,TYPE,MOUNTPOINT,RM"])
+        .args(["-J", "-o", "NAME,PATH,TYPE,MOUNTPOINT,RM,HOTPLUG,TRAN"])
         .output()
         .map_err(UsbMountError::Command)?;
 
@@ -472,7 +512,7 @@ fn enumerate_usb_devices() -> Result<Vec<UsbDevice>, UsbMountError> {
 
     let mut devices = Vec::new();
     for device in info.blockdevices {
-        collect_usb_candidates(&device, device.rm.unwrap_or(0) != 0, &mut devices);
+        collect_usb_candidates(&device, false, &mut devices);
     }
 
     if devices.is_empty() {
@@ -482,8 +522,11 @@ fn enumerate_usb_devices() -> Result<Vec<UsbDevice>, UsbMountError> {
     }
 }
 
-fn collect_usb_candidates(device: &LsblkDevice, inherited_removable: bool, out: &mut Vec<UsbDevice>) {
-    let is_removable = device.rm.unwrap_or(0) != 0 || inherited_removable;
+fn collect_usb_candidates(device: &LsblkDevice, inherited_candidate: bool, out: &mut Vec<UsbDevice>) {
+    let self_candidate = device.rm.unwrap_or(0) != 0
+        || device.hotplug.unwrap_or(0) != 0
+        || device.tran.as_deref() == Some("usb");
+    let is_candidate = self_candidate || inherited_candidate;
     let mount_point = device.mountpoint.clone();
     let path = device
         .path
@@ -494,7 +537,7 @@ fn collect_usb_candidates(device: &LsblkDevice, inherited_removable: bool, out: 
     match device.kind.as_str() {
         "disk" => {
             if device.children.is_empty() {
-                if is_removable {
+                if is_candidate {
                     if let Some(dev_path) = path {
                         out.push(UsbDevice {
                             device_path: dev_path,
@@ -504,12 +547,12 @@ fn collect_usb_candidates(device: &LsblkDevice, inherited_removable: bool, out: 
                 }
             } else {
                 for child in &device.children {
-                    collect_usb_candidates(child, is_removable, out);
+                    collect_usb_candidates(child, is_candidate, out);
                 }
             }
         }
         "part" => {
-            if is_removable {
+            if is_candidate {
                 if let Some(dev_path) = path {
                     out.push(UsbDevice {
                         device_path: dev_path,
@@ -585,6 +628,10 @@ struct LsblkDevice {
     mountpoint: Option<String>,
     #[serde(default)]
     rm: Option<u8>,
+    #[serde(default)]
+    hotplug: Option<u8>,
+    #[serde(default)]
+    tran: Option<String>,
     #[serde(default)]
     children: Vec<LsblkDevice>,
 }
