@@ -52,6 +52,7 @@ struct DayGroup {
     date: NaiveDate,
     weekday_name: String,
     rows: Vec<ReportRow>,
+    is_weekend: bool,
 }
 
 pub fn generate_monthly_reports(
@@ -131,8 +132,8 @@ fn build_rows(
         if rows.is_empty() {
             rows.push(ReportRow {
                 date: current_day,
-                clock_in: "--".to_string(),
-                clock_out: "--".to_string(),
+                clock_in: "--:--:--".to_string(),
+                clock_out: "--:--:--".to_string(),
                 duration_minutes: 0,
                 duration_label: format_duration(0),
                 is_open: false,
@@ -145,6 +146,7 @@ fn build_rows(
             date: current_day,
             weekday_name,
             rows,
+            is_weekend: current_day.weekday() == Weekday::Sun,
         });
 
         current_day = current_day + Duration::days(1);
@@ -170,11 +172,11 @@ fn to_report_row(entry: &TimesheetEntry) -> ReportRow {
 
     ReportRow {
         date: start_local.date_naive(),
-        clock_in: start_local.format("%H:%M").to_string(),
+        clock_in: start_local.format("%H:%M:%S").to_string(),
         clock_out: if is_open {
-            format!("{}*", end_local.format("%H:%M"))
+            format!("{}*", end_local.format("%H:%M:%S"))
         } else {
-            end_local.format("%H:%M").to_string()
+            end_local.format("%H:%M:%S").to_string()
         },
         duration_minutes,
         duration_label: format_duration(duration_minutes),
@@ -194,7 +196,7 @@ fn write_html_report(
     writeln!(
         html,
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Timesheet {name} {month}</title>\
-<style>body{{font-family:Arial,sans-serif;padding:20px}}h1{{margin-bottom:0}}table{{border-collapse:collapse;width:100%;margin-top:16px}}th,td{{border:1px solid #555;padding:6px;text-align:center}}th{{background-color:#eee}}table tbody tr.day-even td{{background-color:#f7f7f7}}table tbody tr.day-odd td{{background-color:#ffffff}}table tbody tr td:first-child{{font-weight:600}}</style></head><body>",
+<style>body{{font-family:Arial,sans-serif;padding:20px}}h1{{margin-bottom:0}}table{{border-collapse:collapse;width:100%;margin-top:16px}}th,td{{border:1px solid #555;padding:6px;text-align:center}}th{{background-color:#eee}}table tbody tr.day-even td{{background-color:#f7f7f7}}table tbody tr.day-odd td{{background-color:#ffffff}}table tbody tr.weekend td{{color:#e33d3d}}table tbody tr td:first-child{{font-weight:600}}</style></head><body>",
         name = worker_name,
         month = month
     )
@@ -212,7 +214,12 @@ fn write_html_report(
         html.push_str("<tr><td colspan=\"4\">No recorded sessions for this month.</td></tr>");
     } else {
         for (index, group) in day_groups.iter().enumerate() {
-            let class = if index % 2 == 0 { "day-even" } else { "day-odd" };
+            let base_class = if index % 2 == 0 { "day-even" } else { "day-odd" };
+            let class = if group.is_weekend {
+                format!("{} weekend", base_class)
+            } else {
+                base_class.to_string()
+            };
             let rowspan = group.rows.len();
             for (row_idx, row) in group.rows.iter().enumerate() {
                 html.push_str(&format!("<tr class=\"{}\">", class));
