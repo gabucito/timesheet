@@ -135,14 +135,17 @@ fn build_rows(
     let mut has_open_sessions = false;
 
     for entry in entries {
-        let row = to_report_row(&entry);
-        if row.duration_minutes >= 0 {
-            total_minutes += row.duration_minutes;
+        let start_local = entry.clock_in.with_timezone(&Santiago).date_naive();
+        if start_local <= selected_date {
+            let row = to_report_row(&entry);
+            if row.duration_minutes >= 0 {
+                total_minutes += row.duration_minutes;
+            }
+            if row.is_open {
+                has_open_sessions = true;
+            }
+            grouped.entry(row.date).or_default().push(row);
         }
-        if row.is_open {
-            has_open_sessions = true;
-        }
-        grouped.entry(row.date).or_default().push(row);
     }
 
     let month_start = NaiveDate::parse_from_str(&format!("{}-01", month_key), "%Y-%m-%d")
