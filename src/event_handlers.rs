@@ -385,7 +385,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
             let result = {
                 let conn_ref = conn_clone_report.borrow();
                 reports::generate_monthly_reports(
-                    &*conn_ref,
+                    &conn_ref,
                     month_start,
                     selected_naive,
                     &output_dir,
@@ -549,14 +549,13 @@ fn collect_usb_candidates(
     match device.kind.as_str() {
         "disk" => {
             if device.children.is_empty() {
-                if is_candidate {
-                    if let Some(dev_path) = path {
+                if is_candidate
+                    && let Some(dev_path) = path {
                         out.push(UsbDevice {
                             device_path: dev_path,
                             mount_point,
                         });
                     }
-                }
             } else {
                 for child in &device.children {
                     collect_usb_candidates(child, is_candidate, out);
@@ -564,14 +563,13 @@ fn collect_usb_candidates(
             }
         }
         "part" => {
-            if is_candidate {
-                if let Some(dev_path) = path {
+            if is_candidate
+                && let Some(dev_path) = path {
                     out.push(UsbDevice {
                         device_path: dev_path,
                         mount_point,
                     });
                 }
-            }
         }
         _ => {}
     }
@@ -597,7 +595,7 @@ fn mount_device(device_path: &str) -> Result<PathBuf, UsbMountError> {
     }
 
     let stdout = String::from_utf8(output.stdout)?;
-    parse_mount_point(&stdout).ok_or_else(|| UsbMountError::Parse(stdout))
+    parse_mount_point(&stdout).ok_or(UsbMountError::Parse(stdout))
 }
 
 fn parse_mount_point(output: &str) -> Option<PathBuf> {

@@ -174,7 +174,7 @@ fn build_rows(
             is_weekend: current_day.weekday() == Weekday::Sun,
         });
 
-        current_day = current_day + Duration::days(1);
+        current_day += Duration::days(1);
     }
 
     Ok(WorkerRows {
