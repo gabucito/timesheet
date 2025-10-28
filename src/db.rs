@@ -262,3 +262,33 @@ pub fn get_monthly_hours(conn: &Connection, worker_id: i64, month: &str) -> Resu
     }
     Ok(total_hours)
 }
+
+pub fn get_monthly_timesheet_entries(
+    conn: &Connection,
+    worker_id: i64,
+    month: &str,
+) -> Result<Vec<TimesheetEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, worker_id, clock_in, clock_out FROM timesheets WHERE worker_id = ? AND strftime('%Y-%m', clock_in) = ? ORDER BY clock_in",
+    )?;
+    let entry_iter = stmt.query_map(rusqlite::params![worker_id, month], |row| {
+        let clock_out: Option<String> = row.get(3)?;
+        Ok(TimesheetEntry {
+            id: row.get(0)?,
+            worker_id: row.get(1)?,
+            clock_in: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                .expect("Invalid time")
+                .with_timezone(&Utc),
+            clock_out: if let Some(out) = clock_out {
+                Some(
+                    DateTime::parse_from_rfc3339(&out)
+                        .expect("Invalid time")
+                        .with_timezone(&Utc),
+                )
+            } else {
+                None
+            },
+        })
+    })?;
+    entry_iter.collect()
+}

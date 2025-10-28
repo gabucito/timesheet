@@ -1,9 +1,9 @@
-use chrono::Timelike;
+use chrono::{Datelike, Timelike};
 use chrono_tz::America::Santiago;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::db;
+use crate::{db, reports};
 use slint::ComponentHandle;
 
 static LAST_SCAN_TIME: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>> =
@@ -21,7 +21,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
     let conn_clone4 = conn.clone();
     let conn_clone_date = conn.clone();
     let _conn_clone_worker_timer = conn.clone();
-    let conn_clone_print = conn.clone();
+    let conn_clone_report = conn.clone();
 
     ui.on_barcode_scanned(move |barcode_str| {
         println!("Barcode scanned callback triggered with: '{}'", barcode_str);
@@ -241,7 +241,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
     });
 
     let ui_handle_test = ui.as_weak();
-    let ui_handle_print = ui_handle.clone();
+    let ui_handle_report = ui_handle.clone();
     ui.on_test_printer_connection(move || {
         if let Some(ui) = ui_handle_test.upgrade() {
             // Comprehensive list of common USB thermal printer device paths in Linux
@@ -279,86 +279,44 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
         }
     });
 
-    ui.on_print_report(move || {
-        println!("Print report button clicked");
-        if let Some(ui) = ui_handle_print.upgrade() {
-            let conn_ref = conn_clone_print.borrow();
+    ui.on_generate_report(move || {
+        if let Some(ui) = ui_handle_report.upgrade() {
+            ui.set_report_status_message("".into());
             let selected_date_str = ui.get_selected_date().to_string();
             let selected_naive = chrono::NaiveDate::parse_from_str(&selected_date_str, "%Y-%m-%d")
-                .unwrap_or(chrono::Utc::now().date_naive());
-            let today = selected_naive.format("%Y-%m-%d").to_string();
-            let month = selected_naive.format("%Y-%m").to_string();
-            let week = selected_naive.week(chrono::Weekday::Mon);
-            let week_start = week.first_day();
-            let week_end = week.last_day();
-            let week_start_str = week_start.format("%Y-%m-%d").to_string();
-            let week_end_str = week_end.format("%Y-%m-%d").to_string();
+                .unwrap_or_else(|_| chrono::Utc::now().date_naive());
+            let month_start = chrono::NaiveDate::from_ymd_opt(
+                selected_naive.year(),
+                selected_naive.month(),
+                1,
+            )
+            .unwrap_or(selected_naive);
+            let month_label = month_start.format("%Y-%m").to_string();
+            let output_dir = std::path::PathBuf::from(format!("reports/{}", month_label));
 
-            let workers = db::get_workers(&conn_ref).unwrap_or_default();
+            let result = {
+                let conn_ref = conn_clone_report.borrow();
+                reports::generate_monthly_reports(&*conn_ref, month_start, &output_dir)
+            };
 
-            let printer_devices = [
-                "/dev/lp0",
-                "/dev/lp1",
-                "/dev/lp2",
-                "/dev/lp3",
-                "/dev/usb/lp0",
-                "/dev/usb/lp1",
-                "/dev/usb/lp2",
-                "/dev/usb/lp3",
-                "/dev/ttyACM0",
-                "/dev/ttyACM1",
-                "/dev/ttyACM2",
-                "/dev/ttyACM3",
-                "/dev/ttyUSB0",
-                "/dev/ttyUSB1",
-                "/dev/ttyUSB2",
-                "/dev/ttyUSB3",
-                "/dev/ttyS0",
-                "/dev/ttyS1",
-                "/dev/ttyS2",
-                "/dev/ttyS3",
-            ];
-            let mut file = None;
-            for device in &printer_devices {
-                let f = std::fs::OpenOptions::new().write(true).open(device);
-                if let Ok(f) = f {
-                    println!("Found printer device: {}", device);
-                    file = Some(f);
-                    break;
-                }
-            }
-            if let Some(mut file) = file {
-                use std::io::Write;
-
-                std::thread::sleep(std::time::Duration::from_millis(500));
-
-                if let Err(e) = file.write_all(b"\x1b@") {
-                    println!("Error writing ESC/POS init: {}", e);
-                    return;
-                }
-
-                let _ = file.write_all(b"Timesheet Report\n");
-                let _ = file.write_all(format!("Date: {}\n\n", selected_date_str).as_bytes());
-                let _ = file.write_all(b"Name\tDaily\tWeekly\tMonthly\n");
-                let _ = file.write_all(b"--------------------------------\n");
-
-                for worker in &workers {
-                    let daily = db::get_daily_hours(&conn_ref, worker.id, &today).unwrap_or(0.0);
-                    let weekly =
-                        db::get_weekly_hours(&conn_ref, worker.id, &week_start_str, &week_end_str)
-                            .unwrap_or(0.0);
-                    let monthly =
-                        db::get_monthly_hours(&conn_ref, worker.id, &month).unwrap_or(0.0);
-                    let line = format!(
-                        "{}\t{:.2}\t{:.2}\t{:.2}\n",
-                        worker.name, daily, weekly, monthly
+            match result {
+                Ok(()) => {
+                    ui.set_report_status_message(
+                        format!(
+                            "Reportes generados para {} en {}",
+                            month_label,
+                            output_dir.display()
+                        )
+                        .into(),
                     );
-                    let _ = file.write_all(line.as_bytes());
                 }
-
-                let _ = file.write_all(b"\n\x1dVA\x00");
-                let _ = file.flush();
-                println!("Report sent to printer");
+                Err(e) => {
+                    ui.set_error_dialog_message(
+                        format!("Error al generar reportes: {}", e).into(),
+                    );
+                    ui.set_show_error_dialog(true);
+                    ui.set_trigger_error_dialog_show(true);
+                }
             }
         }
     });

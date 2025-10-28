@@ -40,6 +40,7 @@ export component MainWindow inherits MaterialWindow {
     in-out property <string> current_time_display: "";
     in-out property <string> error_message: "";
     in-out property <string> printer_status_message: "Printer status unknown";
+    in-out property <string> report_status_message: "";
 
     in-out property <bool> show_time: true;
     in-out property <bool> show_reports: false;
@@ -164,7 +165,7 @@ export component MainWindow inherits MaterialWindow {
     callback add_worker(string, string);
     callback edit_worker(string, string, string);
     callback date_changed();
-    callback print_report();
+    callback generate_report();
     callback test_printer_connection();
     callback confirm_check_action(bool); // true for confirm, false for cancel
     callback show_notification_dialog();
@@ -494,12 +495,19 @@ export component MainWindow inherits MaterialWindow {
                     }
 
                     FilledButton {
-                        text: "Print Report";
+                        text: "Generate Report";
 
                         clicked => {
-                            print_report();
+                            generate_report();
                         }
                     }
+                }
+
+                if report_status_message != "" : MaterialText {
+                    text: report_status_message;
+                    horizontal-alignment: center;
+                    font-size: 16px;
+                    color: #2e7d32;
                 }
 
                 Horizontal {
