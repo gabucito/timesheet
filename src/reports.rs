@@ -68,6 +68,7 @@ struct DayGroup {
 pub fn generate_monthly_reports(
     conn: &Connection,
     month: NaiveDate,
+    selected_date: NaiveDate,
     output_root: &Path,
 ) -> Result<(), ReportError> {
     let month_key = month.format("%Y-%m").to_string();
@@ -77,7 +78,7 @@ pub fn generate_monthly_reports(
     let mut all_worker_data = Vec::new();
 
     for worker in workers {
-        let worker_rows = build_rows(conn, worker.id, &month_key)?;
+        let worker_rows = build_rows(conn, worker.id, &month_key, selected_date)?;
         let worker_dir = output_root;
         let sanitized_name = sanitize_filename(&worker.name);
 
@@ -126,6 +127,7 @@ fn build_rows(
     conn: &Connection,
     worker_id: i64,
     month_key: &str,
+    selected_date: NaiveDate,
 ) -> Result<WorkerRows, ReportError> {
     let entries = db::get_monthly_timesheet_entries(conn, worker_id, month_key)?;
     let mut grouped: BTreeMap<NaiveDate, Vec<ReportRow>> = BTreeMap::new();
@@ -148,7 +150,9 @@ fn build_rows(
 
     let mut day_groups = Vec::new();
     let mut current_day = month_start;
-    while current_day.month() == month_start.month() {
+    // Include days up to and including the selected date
+    let end_date = selected_date.min(month_start + Duration::days(30)); // Cap at end of month
+    while current_day <= end_date && current_day.month() == month_start.month() {
         let mut rows = grouped.remove(&current_day).unwrap_or_default();
         if rows.is_empty() {
             rows.push(ReportRow {

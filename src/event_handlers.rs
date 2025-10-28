@@ -324,9 +324,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
             };
 
             let Some(target_string) = target_string else {
-                ui.set_error_dialog_message(
-                    "No hay carpeta seleccionada para abrir".into(),
-                );
+                ui.set_error_dialog_message("No hay carpeta seleccionada para abrir".into());
                 ui.set_show_error_dialog(true);
                 ui.set_trigger_error_dialog_show(true);
                 return;
@@ -336,11 +334,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
 
             if !target_path.exists() {
                 ui.set_error_dialog_message(
-                    format!(
-                        "La carpeta {} no existe",
-                        target_path.display()
-                    )
-                    .into(),
+                    format!("La carpeta {} no existe", target_path.display()).into(),
                 );
                 ui.set_show_error_dialog(true);
                 ui.set_trigger_error_dialog_show(true);
@@ -369,20 +363,33 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
             let selected_date_str = ui.get_selected_date().to_string();
             let selected_naive = chrono::NaiveDate::parse_from_str(&selected_date_str, "%Y-%m-%d")
                 .unwrap_or_else(|_| chrono::Utc::now().date_naive());
-            let month_start = chrono::NaiveDate::from_ymd_opt(
-                selected_naive.year(),
-                selected_naive.month(),
-                1,
-            )
-            .unwrap_or(selected_naive);
+            let month_start =
+                chrono::NaiveDate::from_ymd_opt(selected_naive.year(), selected_naive.month(), 1)
+                    .unwrap_or(selected_naive);
             let month_label = month_start.format("%Y-%m").to_string();
-            let base_directory = ui.get_report_output_directory().to_string();
-            let output_dir = resolve_output_directory(&base_directory, &month_label);
+
+            // Use a standard accessible location for reports
+            let output_dir = PathBuf::from("/tmp/timesheet_reports").join(&month_label);
             let output_dir_str = output_dir.display().to_string();
+
+            // Ensure the directory exists
+            if let Err(e) = fs::create_dir_all(&output_dir) {
+                ui.set_error_dialog_message(
+                    format!("Error creating report directory: {}", e).into(),
+                );
+                ui.set_show_error_dialog(true);
+                ui.set_trigger_error_dialog_show(true);
+                return;
+            }
 
             let result = {
                 let conn_ref = conn_clone_report.borrow();
-                reports::generate_monthly_reports(&*conn_ref, month_start, &output_dir)
+                reports::generate_monthly_reports(
+                    &*conn_ref,
+                    month_start,
+                    selected_naive,
+                    &output_dir,
+                )
             };
 
             match result {
@@ -391,16 +398,13 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
                     ui.set_report_status_message(
                         format!(
                             "Reportes generados para {} en {}",
-                            month_label,
-                            output_dir_str
+                            month_label, output_dir_str
                         )
                         .into(),
                     );
                 }
                 Err(e) => {
-                    ui.set_error_dialog_message(
-                        format!("Error al generar reportes: {}", e).into(),
-                    );
+                    ui.set_error_dialog_message(format!("Error al generar reportes: {}", e).into());
                     ui.set_show_error_dialog(true);
                     ui.set_trigger_error_dialog_show(true);
                 }
@@ -463,7 +467,11 @@ fn detect_or_mount_usb() -> Result<PathBuf, UsbMountError> {
 }
 
 fn detect_existing_mount() -> Option<PathBuf> {
-    let roots = [Path::new("/run/media"), Path::new("/media"), Path::new("/mnt")];
+    let roots = [
+        Path::new("/run/media"),
+        Path::new("/media"),
+        Path::new("/mnt"),
+    ];
     for root in roots {
         if !root.is_dir() {
             continue;
@@ -522,7 +530,11 @@ fn enumerate_usb_devices() -> Result<Vec<UsbDevice>, UsbMountError> {
     }
 }
 
-fn collect_usb_candidates(device: &LsblkDevice, inherited_candidate: bool, out: &mut Vec<UsbDevice>) {
+fn collect_usb_candidates(
+    device: &LsblkDevice,
+    inherited_candidate: bool,
+    out: &mut Vec<UsbDevice>,
+) {
     let self_candidate = device.rm.unwrap_or(0) != 0
         || device.hotplug.unwrap_or(0) != 0
         || device.tran.as_deref() == Some("usb");
@@ -653,7 +665,10 @@ impl fmt::Display for UsbMountError {
             UsbMountError::NoDevices => write!(f, "no se encontraron dispositivos USB disponibles"),
             UsbMountError::Command(err) => {
                 if err.kind() == io::ErrorKind::NotFound {
-                    write!(f, "no se encontró el comando requerido (instale 'lsblk' y 'udisksctl')")
+                    write!(
+                        f,
+                        "no se encontró el comando requerido (instale 'lsblk' y 'udisksctl')"
+                    )
                 } else {
                     write!(f, "falló la ejecución del comando: {}", err)
                 }
@@ -661,8 +676,14 @@ impl fmt::Display for UsbMountError {
             UsbMountError::CommandFailed(msg) => write!(f, "lsblk devolvió un error: {}", msg),
             UsbMountError::MountFailed(msg) => write!(f, "montaje fallido: {}", msg),
             UsbMountError::Utf8(err) => write!(f, "respuesta inválida: {}", err),
-            UsbMountError::Parse(output) => write!(f, "no se pudo interpretar la ruta de montaje: {}", output.trim()),
-            UsbMountError::Json(err) => write!(f, "no se pudo interpretar la salida de lsblk: {}", err),
+            UsbMountError::Parse(output) => write!(
+                f,
+                "no se pudo interpretar la ruta de montaje: {}",
+                output.trim()
+            ),
+            UsbMountError::Json(err) => {
+                write!(f, "no se pudo interpretar la salida de lsblk: {}", err)
+            }
         }
     }
 }
