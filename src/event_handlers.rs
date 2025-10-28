@@ -1,10 +1,13 @@
 use chrono::{Datelike, Timelike};
 use chrono_tz::America::Santiago;
 use std::cell::RefCell;
-use std::fs;
+use std::fmt;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
+
+use serde::Deserialize;
 
 use crate::{db, reports};
 use slint::ComponentHandle;
@@ -286,15 +289,15 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
 
     ui.on_detect_usb(move || {
         if let Some(ui) = ui_handle_detect_usb.upgrade() {
-            match detect_usb_mount() {
-                Some(path) => {
+            match detect_or_mount_usb() {
+                Ok(path) => {
                     let path_str = path.display().to_string();
                     ui.set_report_output_directory(path_str.clone().into());
-                    ui.set_report_status_message(format!("USB detectado: {}", path_str).into());
+                    ui.set_report_status_message(format!("USB disponible en {}", path_str).into());
                 }
-                None => {
+                Err(err) => {
                     ui.set_error_dialog_message(
-                        "No se detectó un dispositivo USB montado".into(),
+                        format!("No se pudo detectar o montar el USB: {}", err).into(),
                     );
                     ui.set_show_error_dialog(true);
                     ui.set_trigger_error_dialog_show(true);
@@ -424,55 +427,6 @@ fn resolve_output_directory(base: &str, month_label: &str) -> PathBuf {
     }
 }
 
-fn detect_usb_mount() -> Option<PathBuf> {
-    let roots = [Path::new("/run/media"), Path::new("/media"), Path::new("/mnt")];
-
-    for root in roots {
-        if !root.is_dir() {
-            continue;
-        }
-
-        if let Some(found) = find_mount_under(root, true) {
-            return Some(found);
-        }
-    }
-
-    None
-}
-
-fn find_mount_under(root: &Path, allow_direct: bool) -> Option<PathBuf> {
-    // Prefer second-level directories (e.g. /media/user/USB)
-    if let Ok(entries) = fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            if let Ok(nested_entries) = fs::read_dir(&path) {
-                for nested in nested_entries.flatten() {
-                    let nested_path = nested.path();
-                    if nested_path.is_dir() {
-                        return Some(nested_path);
-                    }
-                }
-            }
-        }
-    }
-
-    if allow_direct {
-        if let Ok(entries) = fs::read_dir(root) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    return Some(path);
-                }
-            }
-        }
-    }
-
-    None
-}
-
 fn open_directory_in_file_manager(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -485,5 +439,197 @@ fn open_directory_in_file_manager(path: &Path) -> std::io::Result<()> {
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
         Command::new("xdg-open").arg(path).spawn().map(|_| ())
+    }
+}
+
+fn detect_or_mount_usb() -> Result<PathBuf, UsbMountError> {
+    let devices = enumerate_usb_devices()?;
+
+    if let Some(mounted) = devices
+        .iter()
+        .filter_map(|dev| dev.mount_point.as_ref())
+        .find(|mount| !mount.is_empty())
+    {
+        return Ok(PathBuf::from(mounted));
+    }
+
+    let device = devices.into_iter().next().ok_or(UsbMountError::NoDevices)?;
+    mount_device(&device.device_path)
+}
+
+fn enumerate_usb_devices() -> Result<Vec<UsbDevice>, UsbMountError> {
+    let output = Command::new("lsblk")
+        .args(["-J", "-o", "NAME,PATH,TYPE,MOUNTPOINT,RM"])
+        .output()
+        .map_err(UsbMountError::Command)?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(UsbMountError::CommandFailed(stderr.trim().to_string()));
+    }
+
+    let info: LsblkInfo = serde_json::from_slice(&output.stdout)?;
+
+    let mut devices = Vec::new();
+    for device in info.blockdevices {
+        collect_usb_candidates(&device, device.rm.unwrap_or(0) != 0, &mut devices);
+    }
+
+    if devices.is_empty() {
+        Err(UsbMountError::NoDevices)
+    } else {
+        Ok(devices)
+    }
+}
+
+fn collect_usb_candidates(device: &LsblkDevice, inherited_removable: bool, out: &mut Vec<UsbDevice>) {
+    let is_removable = device.rm.unwrap_or(0) != 0 || inherited_removable;
+    let mount_point = device.mountpoint.clone();
+    let path = device
+        .path
+        .as_ref()
+        .map(|p| p.to_string())
+        .or_else(|| Some(format!("/dev/{}", device.name)));
+
+    match device.kind.as_str() {
+        "disk" => {
+            if device.children.is_empty() {
+                if is_removable {
+                    if let Some(dev_path) = path {
+                        out.push(UsbDevice {
+                            device_path: dev_path,
+                            mount_point,
+                        });
+                    }
+                }
+            } else {
+                for child in &device.children {
+                    collect_usb_candidates(child, is_removable, out);
+                }
+            }
+        }
+        "part" => {
+            if is_removable {
+                if let Some(dev_path) = path {
+                    out.push(UsbDevice {
+                        device_path: dev_path,
+                        mount_point,
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mount_device(device_path: &str) -> Result<PathBuf, UsbMountError> {
+    let output = Command::new("udisksctl")
+        .arg("mount")
+        .arg("-b")
+        .arg(device_path)
+        .output()
+        .map_err(UsbMountError::Command)?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else {
+            stdout.trim().to_string()
+        };
+        return Err(UsbMountError::MountFailed(message));
+    }
+
+    let stdout = String::from_utf8(output.stdout)?;
+    parse_mount_point(&stdout).ok_or_else(|| UsbMountError::Parse(stdout))
+}
+
+fn parse_mount_point(output: &str) -> Option<PathBuf> {
+    // Expect messages like "Mounted /dev/sdb1 at /media/user/LABEL."
+    if let Some(pos) = output.find(" at ") {
+        let after_at = &output[pos + 4..];
+        let path_part = after_at
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_end_matches('.');
+        if !path_part.is_empty() {
+            return Some(PathBuf::from(path_part));
+        }
+    }
+    None
+}
+
+#[derive(Debug)]
+struct UsbDevice {
+    device_path: String,
+    mount_point: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LsblkInfo {
+    #[serde(default)]
+    blockdevices: Vec<LsblkDevice>,
+}
+
+#[derive(Deserialize)]
+struct LsblkDevice {
+    name: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    mountpoint: Option<String>,
+    #[serde(default)]
+    rm: Option<u8>,
+    #[serde(default)]
+    children: Vec<LsblkDevice>,
+}
+
+#[derive(Debug)]
+enum UsbMountError {
+    NoDevices,
+    Command(io::Error),
+    CommandFailed(String),
+    MountFailed(String),
+    Utf8(std::string::FromUtf8Error),
+    Parse(String),
+    Json(serde_json::Error),
+}
+
+impl fmt::Display for UsbMountError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UsbMountError::NoDevices => write!(f, "no se encontraron dispositivos USB disponibles"),
+            UsbMountError::Command(err) => {
+                if err.kind() == io::ErrorKind::NotFound {
+                    write!(f, "no se encontró el comando requerido (instale 'lsblk' y 'udisksctl')")
+                } else {
+                    write!(f, "falló la ejecución del comando: {}", err)
+                }
+            }
+            UsbMountError::CommandFailed(msg) => write!(f, "lsblk devolvió un error: {}", msg),
+            UsbMountError::MountFailed(msg) => write!(f, "montaje fallido: {}", msg),
+            UsbMountError::Utf8(err) => write!(f, "respuesta inválida: {}", err),
+            UsbMountError::Parse(output) => write!(f, "no se pudo interpretar la ruta de montaje: {}", output.trim()),
+            UsbMountError::Json(err) => write!(f, "no se pudo interpretar la salida de lsblk: {}", err),
+        }
+    }
+}
+
+impl std::error::Error for UsbMountError {}
+
+impl From<std::string::FromUtf8Error> for UsbMountError {
+    fn from(value: std::string::FromUtf8Error) -> Self {
+        UsbMountError::Utf8(value)
+    }
+}
+
+impl From<serde_json::Error> for UsbMountError {
+    fn from(value: serde_json::Error) -> Self {
+        UsbMountError::Json(value)
     }
 }
