@@ -41,6 +41,8 @@ export component MainWindow inherits MaterialWindow {
     in-out property <string> error_message: "";
     in-out property <string> printer_status_message: "Printer status unknown";
     in-out property <string> report_status_message: "";
+    in-out property <string> report_output_directory: "";
+    in-out property <string> last_report_directory: "";
 
     in-out property <bool> show_time: true;
     in-out property <bool> show_reports: false;
@@ -166,6 +168,8 @@ export component MainWindow inherits MaterialWindow {
     callback edit_worker(string, string, string);
     callback date_changed();
     callback generate_report();
+    callback detect_usb();
+    callback open_report_directory();
     callback test_printer_connection();
     callback confirm_check_action(bool); // true for confirm, false for cancel
     callback show_notification_dialog();
@@ -499,6 +503,31 @@ export component MainWindow inherits MaterialWindow {
 
                         clicked => {
                             generate_report();
+                        }
+                    }
+                }
+
+                Horizontal {
+                    spacing: 8px;
+
+                    TextField {
+                        width: 400px;
+                        placeholder_text: "Ruta destino (USB u otra carpeta)";
+                        text <=> report_output_directory;
+                    }
+
+                    TextButton {
+                        text: "Detectar USB";
+                        clicked => {
+                            detect_usb();
+                        }
+                    }
+
+                    TextButton {
+                        text: "Abrir carpeta";
+                        enabled: last_report_directory != "" || report_output_directory != "";
+                        clicked => {
+                            open_report_directory();
                         }
                     }
                 }

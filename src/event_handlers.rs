@@ -1,6 +1,9 @@
 use chrono::{Datelike, Timelike};
 use chrono_tz::America::Santiago;
 use std::cell::RefCell;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::rc::Rc;
 
 use crate::{db, reports};
@@ -22,6 +25,8 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
     let conn_clone_date = conn.clone();
     let _conn_clone_worker_timer = conn.clone();
     let conn_clone_report = conn.clone();
+    let ui_handle_detect_usb = ui_handle.clone();
+    let ui_handle_open_dir = ui_handle.clone();
 
     ui.on_barcode_scanned(move |barcode_str| {
         println!("Barcode scanned callback triggered with: '{}'", barcode_str);
@@ -279,9 +284,84 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
         }
     });
 
+    ui.on_detect_usb(move || {
+        if let Some(ui) = ui_handle_detect_usb.upgrade() {
+            match detect_usb_mount() {
+                Some(path) => {
+                    let path_str = path.display().to_string();
+                    ui.set_report_output_directory(path_str.clone().into());
+                    ui.set_report_status_message(format!("USB detectado: {}", path_str).into());
+                }
+                None => {
+                    ui.set_error_dialog_message(
+                        "No se detectó un dispositivo USB montado".into(),
+                    );
+                    ui.set_show_error_dialog(true);
+                    ui.set_trigger_error_dialog_show(true);
+                }
+            }
+        }
+    });
+
+    ui.on_open_report_directory(move || {
+        if let Some(ui) = ui_handle_open_dir.upgrade() {
+            let target_string = {
+                let last = ui.get_last_report_directory().to_string();
+                if !last.trim().is_empty() {
+                    Some(last.trim().to_string())
+                } else {
+                    let base = ui.get_report_output_directory().to_string();
+                    if !base.trim().is_empty() {
+                        Some(base.trim().to_string())
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            let Some(target_string) = target_string else {
+                ui.set_error_dialog_message(
+                    "No hay carpeta seleccionada para abrir".into(),
+                );
+                ui.set_show_error_dialog(true);
+                ui.set_trigger_error_dialog_show(true);
+                return;
+            };
+
+            let target_path = PathBuf::from(&target_string);
+
+            if !target_path.exists() {
+                ui.set_error_dialog_message(
+                    format!(
+                        "La carpeta {} no existe",
+                        target_path.display()
+                    )
+                    .into(),
+                );
+                ui.set_show_error_dialog(true);
+                ui.set_trigger_error_dialog_show(true);
+                return;
+            }
+
+            if let Err(err) = open_directory_in_file_manager(&target_path) {
+                ui.set_error_dialog_message(
+                    format!(
+                        "No se pudo abrir la carpeta {}: {}",
+                        target_path.display(),
+                        err
+                    )
+                    .into(),
+                );
+                ui.set_show_error_dialog(true);
+                ui.set_trigger_error_dialog_show(true);
+            }
+        }
+    });
+
     ui.on_generate_report(move || {
         if let Some(ui) = ui_handle_report.upgrade() {
             ui.set_report_status_message("".into());
+            ui.set_last_report_directory("".into());
             let selected_date_str = ui.get_selected_date().to_string();
             let selected_naive = chrono::NaiveDate::parse_from_str(&selected_date_str, "%Y-%m-%d")
                 .unwrap_or_else(|_| chrono::Utc::now().date_naive());
@@ -292,7 +372,9 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
             )
             .unwrap_or(selected_naive);
             let month_label = month_start.format("%Y-%m").to_string();
-            let output_dir = std::path::PathBuf::from(format!("reports/{}", month_label));
+            let base_directory = ui.get_report_output_directory().to_string();
+            let output_dir = resolve_output_directory(&base_directory, &month_label);
+            let output_dir_str = output_dir.display().to_string();
 
             let result = {
                 let conn_ref = conn_clone_report.borrow();
@@ -301,11 +383,12 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
 
             match result {
                 Ok(()) => {
+                    ui.set_last_report_directory(output_dir_str.clone().into());
                     ui.set_report_status_message(
                         format!(
                             "Reportes generados para {} en {}",
                             month_label,
-                            output_dir.display()
+                            output_dir_str
                         )
                         .into(),
                     );
@@ -320,4 +403,87 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
             }
         }
     });
+}
+
+fn resolve_output_directory(base: &str, month_label: &str) -> PathBuf {
+    let trimmed = base.trim();
+    if trimmed.is_empty() {
+        return PathBuf::from(format!("reports/{}", month_label));
+    }
+
+    let base_path = PathBuf::from(trimmed);
+    if base_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name == month_label)
+        .unwrap_or(false)
+    {
+        base_path
+    } else {
+        base_path.join(month_label)
+    }
+}
+
+fn detect_usb_mount() -> Option<PathBuf> {
+    let roots = [Path::new("/run/media"), Path::new("/media"), Path::new("/mnt")];
+
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+
+        if let Some(found) = find_mount_under(root, true) {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
+fn find_mount_under(root: &Path, allow_direct: bool) -> Option<PathBuf> {
+    // Prefer second-level directories (e.g. /media/user/USB)
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if let Ok(nested_entries) = fs::read_dir(&path) {
+                for nested in nested_entries.flatten() {
+                    let nested_path = nested.path();
+                    if nested_path.is_dir() {
+                        return Some(nested_path);
+                    }
+                }
+            }
+        }
+    }
+
+    if allow_direct {
+        if let Ok(entries) = fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn open_directory_in_file_manager(path: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer").arg(path).spawn().map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn().map(|_| ())
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(path).spawn().map(|_| ())
+    }
 }
