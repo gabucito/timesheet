@@ -63,6 +63,7 @@ struct DayGroup {
     weekday_name: String,
     rows: Vec<ReportRow>,
     is_weekend: bool,
+    daily_total_minutes: i64,
 }
 
 pub fn generate_monthly_reports(
@@ -157,6 +158,7 @@ fn build_rows(
     let end_date = selected_date.min(month_start + Duration::days(30)); // Cap at end of month
     while current_day <= end_date && current_day.month() == month_start.month() {
         let mut rows = grouped.remove(&current_day).unwrap_or_default();
+        let mut daily_total_minutes = 0;
         if rows.is_empty() {
             rows.push(ReportRow {
                 date: current_day,
@@ -168,6 +170,7 @@ fn build_rows(
             });
         } else {
             rows.sort_by(|a, b| a.clock_in.cmp(&b.clock_in));
+            daily_total_minutes = rows.iter().map(|r| r.duration_minutes).sum();
         }
         let weekday_name = weekday_name_es(current_day.weekday()).to_string();
         day_groups.push(DayGroup {
@@ -175,6 +178,7 @@ fn build_rows(
             weekday_name,
             rows,
             is_weekend: current_day.weekday() == Weekday::Sun,
+            daily_total_minutes,
         });
 
         current_day += Duration::days(1);
@@ -236,11 +240,12 @@ fn write_html_report(
         month
     )
     .expect("write to string");
-    html.push_str("<table><thead><tr><th>Date</th><th>Clock In</th><th>Clock Out</th><th>Duration (HH:MM)</th></tr></thead><tbody>");
+    html.push_str("<table><thead><tr><th>Date</th><th>Clock In</th><th>Clock Out</th><th>Duration (HH:MM)</th><th>Daily Total (HH:MM)</th><th>Daily Total Minutes</th></tr></thead><tbody>");
 
     if day_groups.is_empty() {
-        html.push_str("<tr><td colspan=\"4\">No recorded sessions for this month.</td></tr>");
+        html.push_str("<tr><td colspan=\"6\">No recorded sessions for this month.</td></tr>");
     } else {
+        let mut cumulative_minutes = 0;
         for (index, group) in day_groups.iter().enumerate() {
             let base_class = if index % 2 == 0 {
                 "day-even"
@@ -253,23 +258,33 @@ fn write_html_report(
                 base_class.to_string()
             };
             let rowspan = group.rows.len();
+            cumulative_minutes += group.daily_total_minutes;
             for (row_idx, row) in group.rows.iter().enumerate() {
                 html.push_str(&format!("<tr class=\"{}\">", class));
                 if row_idx == 0 {
                     writeln!(
+                    html,
+                    "<td rowspan=\"{rowspan}\"><strong>{date}</strong><br/><small>{weekday}</small></td>",
+                    date = group.date.format("%m/%d"),
+                    weekday = group.weekday_name,
+                )
+                .expect("write to string");
+                }
+                if row_idx == 0 {
+                    writeln!(
+                    html,
+                    "<td>{}</td><td>{}</td><td>{}</td><td rowspan=\"{rowspan}\">{}</td><td rowspan=\"{rowspan}\">({}) ({})</td></tr>",
+                    row.clock_in, row.clock_out, row.duration_label, format_duration(group.daily_total_minutes), group.daily_total_minutes, cumulative_minutes
+                )
+                .expect("write to string");
+                } else {
+                    writeln!(
                         html,
-                        "<td rowspan=\"{rowspan}\"><strong>{date}</strong><br/><small>{weekday}</small></td>",
-                        date = group.date.format("%m/%d"),
-                        weekday = group.weekday_name,
+                        "<td>{}</td><td>{}</td><td>{}</td><td></td><td></td></tr>",
+                        row.clock_in, row.clock_out, row.duration_label
                     )
                     .expect("write to string");
                 }
-                writeln!(
-                    html,
-                    "<td>{}</td><td>{}</td><td>{}</td></tr>",
-                    row.clock_in, row.clock_out, row.duration_label
-                )
-                .expect("write to string");
             }
         }
     }
@@ -304,7 +319,7 @@ fn write_csv_report(
     let mut contents = String::new();
     writeln!(contents, "Worker,{}", worker_name).expect("write to string");
     writeln!(contents, "Month,{}", month).expect("write to string");
-    contents.push_str("Date,Day,Clock In,Clock Out,Duration Minutes,Duration HH:MM\n");
+    contents.push_str("Date,Day,Clock In,Clock Out,Duration Minutes,Duration HH:MM,Daily Total Minutes,Daily Total HH:MM\n");
     if day_groups.is_empty() {
         contents.push_str("-, -, -, -, 0, 00:00\n");
     } else {
@@ -320,15 +335,27 @@ fn write_csv_report(
                 } else {
                     "".to_string()
                 };
+                let daily_total_minutes_text = if idx == 0 {
+                    group.daily_total_minutes.to_string()
+                } else {
+                    "".to_string()
+                };
+                let daily_total_label_text = if idx == 0 {
+                    format_duration(group.daily_total_minutes)
+                } else {
+                    "".to_string()
+                };
                 writeln!(
                     contents,
-                    "{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{}",
                     date_text,
                     day_text,
                     row.clock_in,
                     row.clock_out,
                     row.duration_minutes,
-                    row.duration_label
+                    row.duration_label,
+                    daily_total_minutes_text,
+                    daily_total_label_text
                 )
                 .expect("write to string");
             }
@@ -374,11 +401,12 @@ fn write_merged_html_report(
 
         writeln!(html, "<h2>{}</h2>", escape_html(&worker.worker_name)).expect("write to string");
 
-        html.push_str("<table><thead><tr><th>Date</th><th>Clock In</th><th>Clock Out</th><th>Duration (HH:MM)</th></tr></thead><tbody>");
+        html.push_str("<table><thead><tr><th>Date</th><th>Clock In</th><th>Clock Out</th><th>Duration (HH:MM)</th><th>Daily Total (HH:MM)</th><th>Daily Total Minutes</th></tr></thead><tbody>");
 
         if worker.day_groups.is_empty() {
-            html.push_str("<tr><td colspan=\"4\">No recorded sessions for this month.</td></tr>");
+            html.push_str("<tr><td colspan=\"6\">No recorded sessions for this month.</td></tr>");
         } else {
+            let mut cumulative_minutes = 0;
             for (index, group) in worker.day_groups.iter().enumerate() {
                 let base_class = if index % 2 == 0 {
                     "day-even"
@@ -391,6 +419,7 @@ fn write_merged_html_report(
                     base_class.to_string()
                 };
                 let rowspan = group.rows.len();
+                cumulative_minutes += group.daily_total_minutes;
                 for (row_idx, row) in group.rows.iter().enumerate() {
                     html.push_str(&format!("<tr class=\"{}\">", class));
                     if row_idx == 0 {
@@ -402,12 +431,21 @@ fn write_merged_html_report(
                         )
                         .expect("write to string");
                     }
-                    writeln!(
-                        html,
-                        "<td>{}</td><td>{}</td><td>{}</td></tr>",
-                        row.clock_in, row.clock_out, row.duration_label
-                    )
-                    .expect("write to string");
+                    if row_idx == 0 {
+                        writeln!(
+                            html,
+                            "<td>{}</td><td>{}</td><td>{}</td><td rowspan=\"{rowspan}\">{}</td><td rowspan=\"{rowspan}\">({}) ({})</td></tr>",
+                            row.clock_in, row.clock_out, row.duration_label, format_duration(group.daily_total_minutes), group.daily_total_minutes, cumulative_minutes
+                        )
+                        .expect("write to string");
+                    } else {
+                        writeln!(
+                            html,
+                            "<td>{}</td><td>{}</td><td>{}</td><td></td><td></td></tr>",
+                            row.clock_in, row.clock_out, row.duration_label
+                        )
+                        .expect("write to string");
+                    }
                 }
             }
         }
