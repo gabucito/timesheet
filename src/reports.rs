@@ -176,7 +176,7 @@ fn build_rows(
         }
         let weekday_name = weekday_name_es(current_day.weekday()).to_string();
         let minutes_needed = get_minutes_needed(current_day.weekday());
-        let daily_balance = minutes_needed - daily_total_minutes;
+        let daily_balance = daily_total_minutes - minutes_needed;
         day_groups.push(DayGroup {
             date: current_day,
             weekday_name,
@@ -246,7 +246,7 @@ fn write_html_report(
         month
     )
     .expect("write to string");
-    html.push_str("<table><thead><tr><th>Date</th><th>Clock In</th><th>Clock Out</th><th>Duration (HH:MM)</th><th>Daily Total (HH:MM)</th><th>Daily Balance</th></tr></thead><tbody>");
+    html.push_str("<table><thead><tr><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Horas (Minutos)</th><th>Total Horas Dia (Minutos)</th><th>Horas Extras</th></tr></thead><tbody>");
 
     if day_groups.is_empty() {
         html.push_str("<tr><td colspan=\"6\">No recorded sessions for this month.</td></tr>");
@@ -259,6 +259,8 @@ fn write_html_report(
             };
             let class = if group.is_weekend {
                 format!("{} weekend", base_class)
+            } else if group.date.weekday() == Weekday::Sat {
+                format!("{} saturday", base_class)
             } else {
                 base_class.to_string()
             };
@@ -284,7 +286,7 @@ fn write_html_report(
                 } else {
                     writeln!(
                         html,
-                        "<td>{}</td><td>{}</td><td>{}</td><td></td><td></td></tr>",
+                        "<td>{}</td><td>{}</td><td>{}</td></tr>",
                         row.clock_in, row.clock_out, row.duration_label
                     )
                     .expect("write to string");
@@ -323,7 +325,7 @@ fn write_csv_report(
     let mut contents = String::new();
     writeln!(contents, "Worker,{}", worker_name).expect("write to string");
     writeln!(contents, "Month,{}", month).expect("write to string");
-    contents.push_str("Date,Day,Clock In,Clock Out,Duration Minutes,Duration HH:MM,Daily Total Minutes,Daily Total HH:MM,Daily Balance\n");
+    contents.push_str("Fecha,Dia,Entrada,Salida,Minutos,HH:MM,Daily Total Minutes,Daily Total HH:MM,Horas Extras\n");
     if day_groups.is_empty() {
         contents.push_str("-, -, -, -, 0, 00:00\n");
     } else {
@@ -411,7 +413,7 @@ fn write_merged_html_report(
 
         writeln!(html, "<h2>{}</h2>", escape_html(&worker.worker_name)).expect("write to string");
 
-        html.push_str("<table><thead><tr><th>Date</th><th>Clock In</th><th>Clock Out</th><th>Duration (HH:MM)</th><th>Daily Total (HH:MM)</th><th>Daily Balance</th></tr></thead><tbody>");
+        html.push_str("<table><thead><tr><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Horas (Minutos)</th><th>Total Horas Dia (Minutos)</th><th>Horas Extras</th></tr></thead><tbody>");
 
         if worker.day_groups.is_empty() {
             html.push_str("<tr><td colspan=\"6\">No recorded sessions for this month.</td></tr>");
@@ -424,6 +426,8 @@ fn write_merged_html_report(
                 };
                 let class = if group.is_weekend {
                     format!("{} weekend", base_class)
+                } else if group.date.weekday() == Weekday::Sat {
+                    format!("{} saturday", base_class)
                 } else {
                     base_class.to_string()
                 };
@@ -449,7 +453,7 @@ fn write_merged_html_report(
                     } else {
                         writeln!(
                             html,
-                            "<td>{}</td><td>{}</td><td>{}</td><td></td><td></td></tr>",
+                            "<td>{}</td><td>{}</td><td>{}</td></tr>",
                             row.clock_in, row.clock_out, row.duration_label
                         )
                         .expect("write to string");
