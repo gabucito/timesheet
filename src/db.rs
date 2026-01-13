@@ -1,5 +1,7 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use rusqlite::{Connection, Result};
+
+use crate::utils::santiago_day_bounds_utc;
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -17,6 +19,25 @@ pub struct TimesheetEntry {
     pub worker_id: i64,
     pub clock_in: DateTime<Utc>,
     pub clock_out: Option<DateTime<Utc>>,
+}
+
+fn parse_date(date: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
+}
+
+fn parse_month_start(month: &str) -> Option<NaiveDate> {
+    let date = format!("{}-01", month);
+    NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok()
+}
+
+fn next_month_start(date: NaiveDate) -> Option<NaiveDate> {
+    let year = date.year();
+    let month = date.month();
+    if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)
+    }
 }
 
 pub fn init_db() -> Result<Connection> {
@@ -144,27 +165,33 @@ pub fn get_daily_timesheet_entries(
     worker_id: i64,
     date: &str,
 ) -> Result<Vec<TimesheetEntry>> {
+    let Some(date) = parse_date(date) else {
+        return Ok(Vec::new());
+    };
+    let (start_utc, end_utc) = santiago_day_bounds_utc(date);
     let mut stmt = conn.prepare(
-        "SELECT id, worker_id, clock_in, clock_out FROM timesheets WHERE worker_id = ? AND date(clock_in) = ? ORDER BY clock_in",
+        "SELECT id, worker_id, clock_in, clock_out FROM timesheets WHERE worker_id = ? AND clock_in >= ? AND clock_in < ? ORDER BY clock_in",
     )?;
-    let entry_iter = stmt.query_map(rusqlite::params![worker_id, date], |row| {
-        let clock_out: Option<String> = row.get(3)?;
-        Ok(TimesheetEntry {
-            id: row.get(0)?,
-            worker_id: row.get(1)?,
-            clock_in: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
-                .expect("Invalid time")
-                .with_timezone(&Utc),
-            clock_out: if let Some(out) = clock_out {
-                Some(
-                    DateTime::parse_from_rfc3339(&out)
-                        .expect("Invalid time")
-                        .with_timezone(&Utc),
-                )
-            } else {
-                None
-            },
-        })
+    let entry_iter = stmt.query_map(
+        rusqlite::params![worker_id, start_utc.to_rfc3339(), end_utc.to_rfc3339()],
+        |row| {
+            let clock_out: Option<String> = row.get(3)?;
+            Ok(TimesheetEntry {
+                id: row.get(0)?,
+                worker_id: row.get(1)?,
+                clock_in: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                    .expect("Invalid time")
+                    .with_timezone(&Utc),
+                clock_out: if let Some(out) = clock_out {
+                    Some(
+                        DateTime::parse_from_rfc3339(&out)
+                            .expect("Invalid time")
+                            .with_timezone(&Utc),
+                    )
+                } else {
+                    None
+                },
+            })
     })?;
     entry_iter.collect()
 }
@@ -212,10 +239,19 @@ pub fn get_weekly_hours(
     start_date: &str,
     end_date: &str,
 ) -> Result<f64> {
+    let (Some(start_date), Some(end_date)) = (parse_date(start_date), parse_date(end_date)) else {
+        return Ok(0.0);
+    };
+    let (start_utc, _) = santiago_day_bounds_utc(start_date);
+    let (_, end_utc) = santiago_day_bounds_utc(end_date);
     let mut stmt = conn.prepare(
-        "SELECT clock_in, clock_out FROM timesheets WHERE worker_id = ? AND date(clock_in) BETWEEN ? AND ?"
+        "SELECT clock_in, clock_out FROM timesheets WHERE worker_id = ? AND clock_in >= ? AND clock_in < ?"
     )?;
-    let mut rows = stmt.query(rusqlite::params![worker_id, start_date, end_date])?;
+    let mut rows = stmt.query(rusqlite::params![
+        worker_id,
+        start_utc.to_rfc3339(),
+        end_utc.to_rfc3339()
+    ])?;
     let mut total_hours = 0.0;
     let now = Utc::now();
     while let Some(row) = rows.next()? {
@@ -238,10 +274,22 @@ pub fn get_weekly_hours(
 }
 
 pub fn get_monthly_hours(conn: &Connection, worker_id: i64, month: &str) -> Result<f64> {
+    let Some(month_start) = parse_month_start(month) else {
+        return Ok(0.0);
+    };
+    let Some(next_month) = next_month_start(month_start) else {
+        return Ok(0.0);
+    };
+    let (start_utc, _) = santiago_day_bounds_utc(month_start);
+    let (end_utc, _) = santiago_day_bounds_utc(next_month);
     let mut stmt = conn.prepare(
-        "SELECT clock_in, clock_out FROM timesheets WHERE worker_id = ? AND strftime('%Y-%m', clock_in) = ?"
+        "SELECT clock_in, clock_out FROM timesheets WHERE worker_id = ? AND clock_in >= ? AND clock_in < ?"
     )?;
-    let mut rows = stmt.query(rusqlite::params![worker_id, month])?;
+    let mut rows = stmt.query(rusqlite::params![
+        worker_id,
+        start_utc.to_rfc3339(),
+        end_utc.to_rfc3339()
+    ])?;
     let mut total_hours = 0.0;
     let now = Utc::now();
     while let Some(row) = rows.next()? {
@@ -268,27 +316,38 @@ pub fn get_monthly_timesheet_entries(
     worker_id: i64,
     month: &str,
 ) -> Result<Vec<TimesheetEntry>> {
+    let Some(month_start) = parse_month_start(month) else {
+        return Ok(Vec::new());
+    };
+    let Some(next_month) = next_month_start(month_start) else {
+        return Ok(Vec::new());
+    };
+    let (start_utc, _) = santiago_day_bounds_utc(month_start);
+    let (end_utc, _) = santiago_day_bounds_utc(next_month);
     let mut stmt = conn.prepare(
-        "SELECT id, worker_id, clock_in, clock_out FROM timesheets WHERE worker_id = ? AND strftime('%Y-%m', clock_in) = ? ORDER BY clock_in",
+        "SELECT id, worker_id, clock_in, clock_out FROM timesheets WHERE worker_id = ? AND clock_in >= ? AND clock_in < ? ORDER BY clock_in",
     )?;
-    let entry_iter = stmt.query_map(rusqlite::params![worker_id, month], |row| {
-        let clock_out: Option<String> = row.get(3)?;
-        Ok(TimesheetEntry {
-            id: row.get(0)?,
-            worker_id: row.get(1)?,
-            clock_in: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
-                .expect("Invalid time")
-                .with_timezone(&Utc),
-            clock_out: if let Some(out) = clock_out {
-                Some(
-                    DateTime::parse_from_rfc3339(&out)
-                        .expect("Invalid time")
-                        .with_timezone(&Utc),
-                )
-            } else {
-                None
-            },
-        })
-    })?;
+    let entry_iter = stmt.query_map(
+        rusqlite::params![worker_id, start_utc.to_rfc3339(), end_utc.to_rfc3339()],
+        |row| {
+            let clock_out: Option<String> = row.get(3)?;
+            Ok(TimesheetEntry {
+                id: row.get(0)?,
+                worker_id: row.get(1)?,
+                clock_in: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                    .expect("Invalid time")
+                    .with_timezone(&Utc),
+                clock_out: if let Some(out) = clock_out {
+                    Some(
+                        DateTime::parse_from_rfc3339(&out)
+                            .expect("Invalid time")
+                            .with_timezone(&Utc),
+                    )
+                } else {
+                    None
+                },
+            })
+        },
+    )?;
     entry_iter.collect()
 }

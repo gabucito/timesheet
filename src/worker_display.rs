@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use crate::types::{DataWorker, TimesheetDisplay};
 use crate::ui::{ReportItem, WorkerInfo, WorkerWithTimes};
-use crate::utils::format_hours;
+use crate::utils::{format_hours, santiago_today_naive};
 
 pub fn refresh_workers(
     conn: &Rc<RefCell<rusqlite::Connection>>,
@@ -16,7 +16,7 @@ pub fn refresh_workers(
         let conn_ref = conn.borrow();
         match crate::db::get_workers(&conn_ref) {
             Ok(workers) => {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                let today = santiago_today_naive().format("%Y-%m-%d").to_string();
 
                 // Sort workers: in progress first (by last check-in desc), then not in progress (by last check-out desc)
                 let mut worker_sort_list: Vec<(
@@ -295,12 +295,10 @@ pub fn refresh_workers(
 
                 // Update reports
                 let mut report_items = Vec::new();
-                let now = chrono::Utc::now();
-                let _today = now.format("%Y-%m-%d").to_string();
                 let selected_date_str = ui.get_selected_date().to_string();
                 let selected_naive =
                     chrono::NaiveDate::parse_from_str(&selected_date_str, "%Y-%m-%d")
-                        .unwrap_or(now.date_naive());
+                        .unwrap_or(santiago_today_naive());
                 let today = selected_naive.format("%Y-%m-%d").to_string();
                 let month = selected_naive.format("%Y-%m").to_string();
                 // Week start (Monday), end (Sunday)

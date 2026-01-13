@@ -11,6 +11,7 @@ use std::rc::Rc;
 use serde::Deserialize;
 
 use crate::{db, reports};
+use crate::utils::santiago_today_naive;
 use slint::ComponentHandle;
 
 static LAST_SCAN_TIME: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>> =
@@ -362,7 +363,7 @@ pub fn setup_event_handlers(conn: Rc<RefCell<rusqlite::Connection>>, ui: &crate:
             ui.set_last_report_directory("".into());
             let selected_date_str = ui.get_selected_date().to_string();
             let selected_naive = chrono::NaiveDate::parse_from_str(&selected_date_str, "%Y-%m-%d")
-                .unwrap_or_else(|_| chrono::Utc::now().date_naive());
+                .unwrap_or_else(|_| santiago_today_naive());
             let month_start =
                 chrono::NaiveDate::from_ymd_opt(selected_naive.year(), selected_naive.month(), 1)
                     .unwrap_or(selected_naive);
