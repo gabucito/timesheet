@@ -38,6 +38,7 @@ export component MainWindow inherits MaterialWindow {
     in-out property <string> selected_worker_barcode: "";
     in-out property <string> selected_date;
     in-out property <string> current_time_display: "";
+    in-out property <string> current_ip_display: "No disponible";
     in-out property <string> error_message: "";
     in-out property <string> printer_status_message: "Printer status unknown";
     in-out property <string> report_status_message: "";
@@ -505,6 +506,13 @@ export component MainWindow inherits MaterialWindow {
                             generate_report();
                         }
                     }
+                }
+
+                MaterialText {
+                    text: "IP actual: " + current_ip_display;
+                    horizontal-alignment: center;
+                    font-size: 12px;
+                    color: #666666;
                 }
 
                 Horizontal {

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::utils::santiago_today_naive;
+use crate::utils::{local_ip_address, santiago_today_naive};
 use crate::worker_display::refresh_workers;
 use chrono_tz::America::Santiago;
 
@@ -16,6 +16,8 @@ pub fn initialize_ui_and_data(
     // Initialize current time display
     let santiago_time = chrono::Utc::now().with_timezone(&Santiago);
     ui.set_current_time_display(santiago_time.format("%H:%M:%S").to_string().into());
+    let ip_display = local_ip_address().unwrap_or_else(|| "No disponible".to_string());
+    ui.set_current_ip_display(ip_display.into());
 
     // Load initial data using refresh function
     refresh_workers(conn, ui_handle);

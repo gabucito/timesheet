@@ -1,12 +1,21 @@
 use crate::db::{self, TimesheetEntry};
 use chrono::{Datelike, Duration, NaiveDate, Utc, Weekday};
 use chrono_tz::America::Santiago;
+use lettre::message::{Attachment, MultiPart, SinglePart, header};
+use lettre::transport::smtp::authentication::Credentials;
+use lettre::{Message, SmtpTransport, Transport};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
+use std::env;
 use std::fmt::{self, Write as _};
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+const REPORT_EMAIL_FROM: &str = "gabu@melquisedec.cl";
+const REPORT_EMAIL_TO: &str = "libreria@melquisedec.cl";
+const REPORT_SMTP_HOST: &str = "echo.mxrouting.net";
+const REPORT_SMTP_PORT: u16 = 465;
 
 #[derive(Clone)]
 struct WorkerReportData {
@@ -21,6 +30,7 @@ pub enum ReportError {
     Database(rusqlite::Error),
     Io(std::io::Error),
     InvalidMonth(String),
+    Email(String),
 }
 
 impl fmt::Display for ReportError {
@@ -29,6 +39,7 @@ impl fmt::Display for ReportError {
             ReportError::Database(e) => write!(f, "database error: {}", e),
             ReportError::Io(e) => write!(f, "io error: {}", e),
             ReportError::InvalidMonth(m) => write!(f, "invalid month value: {}", m),
+            ReportError::Email(m) => write!(f, "email error: {}", m),
         }
     }
 }
@@ -79,6 +90,7 @@ pub fn generate_monthly_reports(
 
     let workers = db::get_workers(conn)?;
     let mut all_worker_data = Vec::new();
+    let mut worker_html_paths = Vec::new();
 
     for worker in workers {
         let worker_rows = build_rows(conn, worker.id, &month_key, selected_date)?;
@@ -96,6 +108,7 @@ pub fn generate_monthly_reports(
             worker_rows.total_minutes,
             worker_rows.has_open_sessions,
         )?;
+        worker_html_paths.push(html_path);
         write_csv_report(
             &csv_path,
             &worker.name,
@@ -116,6 +129,7 @@ pub fn generate_monthly_reports(
     // Generate merged HTML report
     let merged_html_path = output_root.join(format!("{}_all_workers.html", month_key));
     write_merged_html_report(&merged_html_path, &month_key, &all_worker_data)?;
+    send_worker_html_reports_email(&month_key, &worker_html_paths)?;
 
     Ok(())
 }
@@ -480,6 +494,78 @@ fn write_merged_html_report(
 
     let mut file = File::create(path)?;
     file.write_all(html.as_bytes())?;
+    Ok(())
+}
+
+fn send_worker_html_reports_email(
+    month_key: &str,
+    worker_html_paths: &[PathBuf],
+) -> Result<(), ReportError> {
+    if worker_html_paths.is_empty() {
+        return Ok(());
+    }
+
+    let smtp_username =
+        env::var("TIMESHEET_SMTP_USERNAME").unwrap_or_else(|_| REPORT_EMAIL_FROM.to_string());
+    let smtp_password = env::var("TIMESHEET_SMTP_PASSWORD")
+        .or_else(|_| env::var("TIMESHEET_REPORT_EMAIL_PASSWORD"))
+        .map_err(|_| {
+            ReportError::Email(
+                "missing SMTP password; set TIMESHEET_SMTP_PASSWORD (or TIMESHEET_REPORT_EMAIL_PASSWORD)"
+                    .to_string(),
+            )
+        })?;
+
+    let text_body = format!(
+        "Adjuntamos los reportes HTML por trabajador para el mes {}.",
+        month_key
+    );
+    let html_attachment_type: header::ContentType = "text/html; charset=utf-8"
+        .parse()
+        .map_err(|e| ReportError::Email(format!("invalid attachment content type: {}", e)))?;
+
+    let mut multipart = MultiPart::mixed().singlepart(
+        SinglePart::builder()
+            .header(header::ContentType::TEXT_PLAIN)
+            .body(text_body),
+    );
+
+    for html_path in worker_html_paths {
+        let html_bytes = fs::read(html_path)?;
+        let attachment_name = html_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("reporte.html")
+            .to_string();
+        multipart = multipart.singlepart(
+            Attachment::new(attachment_name).body(html_bytes, html_attachment_type.clone()),
+        );
+    }
+
+    let email = Message::builder()
+        .from(
+            REPORT_EMAIL_FROM
+                .parse()
+                .map_err(|e| ReportError::Email(format!("invalid sender address: {}", e)))?,
+        )
+        .to(REPORT_EMAIL_TO
+            .parse()
+            .map_err(|e| ReportError::Email(format!("invalid destination address: {}", e)))?)
+        .subject(format!("Reportes HTML trabajadores {}", month_key))
+        .multipart(multipart)
+        .map_err(|e| ReportError::Email(format!("failed to build email: {}", e)))?;
+
+    let credentials = Credentials::new(smtp_username, smtp_password);
+    let transport = SmtpTransport::relay(REPORT_SMTP_HOST)
+        .map_err(|e| ReportError::Email(format!("failed to configure SMTP relay: {}", e)))?
+        .port(REPORT_SMTP_PORT)
+        .credentials(credentials)
+        .build();
+
+    transport
+        .send(&email)
+        .map_err(|e| ReportError::Email(format!("failed to send email: {}", e)))?;
+
     Ok(())
 }
 

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::America::Santiago;
+use std::net::UdpSocket;
 
 pub fn format_hours(decimal_hours: f64) -> String {
     let hours = decimal_hours as i32;
@@ -9,6 +10,23 @@ pub fn format_hours(decimal_hours: f64) -> String {
 
 pub fn santiago_today_naive() -> NaiveDate {
     Utc::now().with_timezone(&Santiago).date_naive()
+}
+
+pub fn local_ip_address() -> Option<String> {
+    // UDP connect does not send traffic here; it lets the OS select an outbound interface.
+    let probes = ["8.8.8.8:80", "1.1.1.1:80", "208.67.222.222:80"];
+    for probe in probes {
+        let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else {
+            continue;
+        };
+        if socket.connect(probe).is_ok() && let Ok(addr) = socket.local_addr() {
+            let ip = addr.ip();
+            if !ip.is_loopback() && !ip.is_unspecified() {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
 }
 
 pub fn santiago_day_bounds_utc(date: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
