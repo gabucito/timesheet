@@ -612,11 +612,11 @@ fn get_minutes_needed(weekday: Weekday) -> i64 {
     match weekday {
         Weekday::Mon => 510,
         Weekday::Tue => 510,
-        Weekday::Wed => 510,
-        Weekday::Thu => 510,
+        Weekday::Wed => 450,
+        Weekday::Thu => 450,
         Weekday::Fri => 450,
         Weekday::Sat => 150,
-        Weekday::Sun => 0, // Assuming no work on Sundays
+        Weekday::Sun => 0,
     }
 }
 
